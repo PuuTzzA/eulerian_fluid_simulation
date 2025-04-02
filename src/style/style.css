@@ -1,0 +1,33 @@
+/* Reset */
+* {
+    margin: 0;
+    padding: 0;
+}
+
+/* Variables */ 
+:root {
+    --color-debug: rgba(255, 0, 0, 0.2);
+}
+
+body {
+    margin: 0;
+    padding: 0;
+    background-color: black;
+}
+
+.canvas-container{
+    width: 100%;
+    height: 100vh;
+    background-color: black;
+    padding: 0;
+    margin: 0;
+    display: flex;    
+} 
+
+#fps{
+    position: absolute;
+    top: 0;
+    left: 0;
+    color: rgba(255, 255, 255, 0.781);
+    font-family: 'Roboto';
+}

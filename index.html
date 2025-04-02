@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" type="image/x-icon" href="src/style/favicon.svg">
+    <link rel="stylesheet" href="src/style/style_input.css">
+    <link rel="stylesheet" href="src/style/style.css">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" />
+    <title>Viscoelastic Fluid</title>
+</head>
+
+<body>
+    <my-input-container>
+        <div class="dropdown-container">
+            <span id="show-detailed-options" class="material-symbols-outlined" onclick="toggleDetailedOptions()">arrow_drop_up</span>
+            <span>Settings</span>
+            <!-- <div class="dropdown">
+                <button id="dropdown-button" class="button" onclick="toggleDropdown()">
+                    <span id="dropdown-button-text">Water</span>
+                    <span id="dropdown-button-arrow" class="material-symbols-outlined"> arrow_drop_down </span>
+                </button>
+                <div class="dropdown-content" id="quick-select">
+                    <div class="dropdown-option" onclick="selectPreset('Water')">Water</div>
+                    <div class="dropdown-option" onclick="selectPreset('Honey')">Honey</div>
+                    <div class="dropdown-option" onclick="selectPreset('Jelly')">Jelly</div>
+                    <div class="dropdown-option" onclick="selectPreset('Air')">Air</div>
+                </div>
+            </div> -->
+        </div>
+
+        <div id="detailed-options" class="container-sliders">
+            <my-slider title="Resolution X" min="10" max="150" step="1" startingValue="30" callbackFunction="changeResolutionX"></my-slider>
+            <my-slider title="Resolution Y" min="10" max="150" step="1" startingValue="22" callbackFunction="changeResolutionY"></my-slider>
+<!--             <my-slider title="Stiffness" min="0" max="250" step="0.01" startingValue="50" callbackFunction="changeStiffness"></my-slider>
+            <my-slider title="Near Stiffness" min="0" max="250" step="0.01" startingValue="50" callbackFunction="changeNearStiffness"></my-slider>
+            <my-slider title="Linear Viscosity" min="0" max="150" step="0.01" startingValue="0" callbackFunction="changeLinearViscosity"></my-slider>
+            <my-slider title="Quadratic Viscosity" min="0" max="0.05" step="0.001" startingValue="0.01" callbackFunction="changeQuadraticViscosity"></my-slider>
+            <my-slider title="Spring Stiffness" min="0" max="50" step="0.01" startingValue="0" callbackFunction="changeSpringStiffness"></my-slider>
+            <my-slider title="Plasticity" min="0" max="1" step="0.005" startingValue="0" callbackFunction="changePlasticity"></my-slider>
+            <my-slider title="Gravity" min="-2000" max="2000" step="10" startingValue="1000" callbackFunction="changeGravity"></my-slider>
+ -->            <div id="button-container">
+                <my-button title="play_arrow" callbackFunction="start"></my-button>
+                <my-button title="pause " callbackFunction="stopp"></my-button>
+                <my-button title="step" callbackFunction="stepOne"></my-button>
+                <my-button title="restart_alt" callbackFunction="restart"></my-button>
+            </div>
+        </div>
+    </my-input-container>
+
+    <div id="fps">10fps</div>
+
+    <div class="canvas-container">
+        <canvas id="canvas"></canvas>
+    </div>
+
+    <script src="src/script/logic.js"></script>
+    <script src="src/script/script_inputs.js"></script>
+    <script src="src/script/customComponents.js"></script>
+</body>
+
+</html>
