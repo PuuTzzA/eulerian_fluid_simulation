@@ -1,8 +1,60 @@
 // import { Fluid } from "./logic.js";
-document.addEventListener("mousemove", (e) => {
-})
+
+let drawVelX = 0;
+let drawVelY = 0;
+let drawRed = 0;
+
+let mode = "red";
+const modeInidator = document.getElementById("mode");
 
 window.addEventListener("pointerdown", e => {
+    if (e.target.id != "canvas") { return };
+    const x = Math.floor(e.offsetX / fluid.gridSize);
+    const offsetTop = window.innerHeight - fluid.gridSize * fluid.resolutionY;
+    const y = Math.floor((e.offsetY - offsetTop) / fluid.gridSize);
+
+    switch (mode) {
+        case "velocity":
+            fluid.velocitiesX[y * (fluid.resolutionX + 1) + x] = drawVelX;
+            fluid.velocitiesX[y * (fluid.resolutionX + 1) + x + 1] = drawVelX;
+            fluid.velocitiesY[y * (fluid.resolutionX) + x] = drawVelY;
+            fluid.velocitiesY[(y + 1) * (fluid.resolutionX) + x] = drawVelY;
+            break;
+        case "velocityX":
+            fluid.velocitiesX[y * (fluid.resolutionX + 1) + x] = drawVelX;
+            fluid.velocitiesX[y * (fluid.resolutionX + 1) + x + 1] = drawVelX;
+            break;
+        case "velocityY":
+            fluid.velocitiesY[y * (fluid.resolutionX) + x] = drawVelY;
+            fluid.velocitiesY[(y + 1) * (fluid.resolutionX) + x] = drawVelY;
+            break;
+        case "red":
+            fluid.colorRed[y * fluid.resolutionX + x] = drawRed;
+            break;
+    }
+})
+
+addEventListener("keydown", (event) => {
+    if (event.key == "v") {
+        mode = "velocity";
+    } else if (event.key == "x") {
+        mode = "velocityX";
+    } else if (event.key == "y") {
+        mode = "velocityY";
+    } else if (event.key == "r") {
+        mode = "red";
+    }
+    modeInidator.innerHTML = mode;
+});
+
+document.addEventListener("mousemove", (e) => {
+    //if (e.target.id != "canvas") { return };
+    const x = e.offsetX / fluid.gridSize - 0.5;
+    const offsetTop = window.innerHeight - fluid.gridSize * fluid.resolutionY;
+    const y = (e.offsetY - offsetTop) / fluid.gridSize - 0.5;
+
+    console.log(x, y, "vel", Fluid.interpolate(x, y, fluid.colorRed, fluid.resolutionX, fluid.resolutionY));
+    //console.log(x, y, "vel", fluid.getVelocityAtPoint(x, y));
 })
 
 window.addEventListener("pointerup", e => {
@@ -73,7 +125,8 @@ function stopp() {
 }
 
 function stepOne() {
-    // fluid.update(delta);
+    fluid.update(delta);
+    fluid.draw();
 }
 
 function restart() {
@@ -109,6 +162,18 @@ function changeResolutionY(newVal) {
     fluid.setResolutionY(newVal);
 }
 
+function drawVelocityChangeX(newVal) {
+    drawVelX = newVal;
+}
+
+function drawVelocityChangeY(newVal) {
+    drawVelY = newVal;
+}
+
+function drawRedChange(newVal) {
+    drawRed = newVal;
+}
+
 function step(now) {
     if (!previous) { previous = now; };
 
@@ -134,6 +199,7 @@ function step(now) {
             console.log("delta was adjusted")
         } */
 
+    //running = false;
     if (running) {
         fluid.update(delta);
         fluid.draw(delta);
