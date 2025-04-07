@@ -106,57 +106,37 @@ class Fluid {
     }
 
     getVelocityAtPoint(x, y) {
-        const u = Fluid.interpolate(x + 0.5, y, this.velocitiesX, this.resolutionX + 1, this.resolutionY);
-        const v = Fluid.interpolate(x, y + 0.5, this.velocitiesY, this.resolutionX, this.resolutionY + 1);
+        const u = Fluid.bilinearInterpolation(x + 0.5, y, this.velocitiesX, this.resolutionX + 1, this.resolutionY);
+        const v = Fluid.bilinearInterpolation(x, y + 0.5, this.velocitiesY, this.resolutionX, this.resolutionY + 1);
         return [u, v];
     }
+    
+    static bilinearInterpolation(x, y, values, resolutionX, resolutionY) {
+        // Clamp to avoid out-of-bounds access
+        x = Math.max(0, Math.min(x, resolutionX - 1));
+        y = Math.max(0, Math.min(y, resolutionY - 1));
 
-    static interpolate(x, y, values, resolutionX, resolutionY) {
-        if ((x <= -0 && y <= -0) || (x >= resolutionX - 1 && y <= -0) || (x <= -0 && y >= resolutionY - 1)
-            || (x >= resolutionX - 1 && y >= resolutionY - 1)) {
-            x = Math.max(x, 0);
-            x = Math.min(x, resolutionX - 1);
-            y = Math.max(y, 0);
-            y = Math.min(y, resolutionY - 1);
-            x = Math.floor(x + 0.5);
-            y = Math.floor(y + 0.5);
-            return values[y * resolutionX + x];
-        }
+        const x0 = Math.floor(x);
+        const y0 = Math.floor(y);
+        const x1 = Math.min(x0 + 1, resolutionX - 1);
+        const y1 = Math.min(y0 + 1, resolutionY - 1);
 
-        const alpha = x % 1;
-        const beta = y % 1;
-        y = Math.floor(y);
-        x = Math.floor(x);
+        const alpha = x - x0;
+        const beta = y - y0;
 
-        if (x <= -1) {
-            const valueTop = values[y * resolutionX];
-            const valueBottom = values[(y + 1) * resolutionX];
-            return valueTop * (1 - beta) + valueBottom * beta;
-        }
-        if (x >= resolutionX - 1) {
-            const valueTop = values[y * resolutionX + resolutionX - 1];
-            const valueBottom = values[(y + 1) * resolutionX + resolutionX - 1];
-            return valueTop * (1 - beta) + valueBottom * beta;
-        }
-        if (y <= -1) {
-            const valueLeft = values[x];
-            const valueRight = values[x + 1];
-            return valueLeft * (1 - alpha) + valueRight * alpha;
-        }
-        if (y >= resolutionY - 1) {
-            const valueLeft = values[(resolutionY - 1) * resolutionX + x];
-            const valueRight = values[(resolutionY - 1) * resolutionX + x + 1];
-            return valueLeft * (1 - alpha) + valueRight * alpha;
-        }
+        const topLeft = values[y0 * resolutionX + x0];
+        const topRight = values[y0 * resolutionX + x1];
+        const bottomLeft = values[y1 * resolutionX + x0];
+        const bottomRight = values[y1 * resolutionX + x1];
 
-        const valueTopLeft = values[y * resolutionX + x];
-        const valueTopRight = values[y * resolutionX + x + 1];
-        const valueBottomLeft = values[(y + 1) * resolutionX + x];
-        const valueBottomRight = values[(y + 1) * resolutionX + x + 1];
+        const top = topLeft * (1 - alpha) + topRight * alpha;
+        const bottom = bottomLeft * (1 - alpha) + bottomRight * alpha;
 
-        const topMiddle = valueTopLeft * (1 - alpha) + valueTopRight * alpha;
-        const bottomMiddle = valueBottomLeft * (1 - alpha) + valueBottomRight * alpha;
-        return topMiddle * (1 - beta) + bottomMiddle * beta;
+        return top * (1 - beta) + bottom * beta;
+    }
+
+    static bicubicInterpolation(x, y, values, resolutionX, resolutionY) {
+
     }
 
     advect(dt, oldVals, resolutionX, resolutionY) {
@@ -181,7 +161,7 @@ class Fluid {
             newY = Math.max(newY, 0);
             newY = Math.min(newY, resolutionY - 1);
 
-            newVals[i] = Fluid.interpolate(newX, newY, oldVals, resolutionX, resolutionY);
+            newVals[i] = Fluid.bilinearInterpolation(newX, newY, oldVals, resolutionX, resolutionY);
         }
 
         return newVals;

@@ -53,7 +53,11 @@ document.addEventListener("mousemove", (e) => {
     const offsetTop = window.innerHeight - fluid.gridSize * fluid.resolutionY;
     const y = (e.offsetY - offsetTop) / fluid.gridSize - 0.5;
 
-    console.log(x, y, "vel", Fluid.interpolate(x, y, fluid.colorRed, fluid.resolutionX, fluid.resolutionY));
+/*     console.log(x, y, "vel", Fluid.bilinearInterpolation(x, y, fluid.colorRed, fluid.resolutionX, fluid.resolutionY));
+    if (Fluid.bilinearInterpolation(x, y, fluid.colorRed, fluid.resolutionX, fluid.resolutionY) !=
+        Fluid.bilinearInterpolation2(x, y, fluid.colorRed, fluid.resolutionX, fluid.resolutionY)) {
+        console.log("bilinear interpolation error");
+    } */
     //console.log(x, y, "vel", fluid.getVelocityAtPoint(x, y));
 })
 
