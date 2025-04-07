@@ -110,7 +110,7 @@ class Fluid {
         const v = Fluid.bilinearInterpolation(x, y + 0.5, this.velocitiesY, this.resolutionX, this.resolutionY + 1);
         return [u, v];
     }
-    
+
     static bilinearInterpolation(x, y, values, resolutionX, resolutionY) {
         // Clamp to avoid out-of-bounds access
         x = Math.max(0, Math.min(x, resolutionX - 1));
@@ -136,7 +136,68 @@ class Fluid {
     }
 
     static bicubicInterpolation(x, y, values, resolutionX, resolutionY) {
+        x = Math.max(0, Math.min(x, resolutionX - 1));
+        y = Math.max(0, Math.min(y, resolutionY - 1));
 
+        const x1 = Math.floor(x);
+        const y1 = Math.floor(y);
+
+        const x0 = Math.max(x1 - 1, 0);
+        const x2 = Math.min(x1 + 1, resolutionX - 1);
+        const x3 = Math.min(x1 + 2, resolutionX - 1);
+
+        const y0 = Math.max(y1 - 1, 0);
+        const y2 = Math.min(y1 + 1, resolutionY - 1);
+        const y3 = Math.min(y1 + 2, resolutionY - 1);
+
+        const alpha = x - x1;
+        const beta = y - y1;
+
+        // weighing coefficients
+        const w0 = (-1 / 3) * alpha + 0.5 * alpha * alpha - (1 / 6) * alpha * alpha * alpha;
+        const w1 = 1 - alpha * alpha + 0.5 * (alpha * alpha * alpha - alpha);
+        const w2 = alpha + 0.5 * (alpha * alpha - alpha * alpha * alpha);
+        const w3 = (1 / 6) * (alpha * alpha * alpha - alpha);
+
+        const ww0 = (-1 / 3) * beta + 0.5 * beta * beta - (1 / 6) * beta * beta * beta;
+        const ww1 = 1 - beta * beta + 0.5 * (beta * beta * beta - beta);
+        const ww2 = beta + 0.5 * (beta * beta - beta * beta * beta);
+        const ww3 = (1 / 6) * (beta * beta * beta - beta);
+
+        // top top row (1st)
+        const topTopLeftLeft = values[y0 * resolutionX + x0];
+        const topTopLeft = values[y0 * resolutionX + x1];
+        const topTopRight = values[y0 * resolutionX + x2];
+        const topTopRightRight = values[y0 * resolutionX + x3];
+
+        const topTop = w0 * topTopLeftLeft + w1 * topTopLeft + w2 * topTopRight + w3 * topTopRightRight;
+
+        // top row (2nd)
+        const topLeftLeft = values[y1 * resolutionX + x0];
+        const topLeft = values[y1 * resolutionX + x1];
+        const topRight = values[y1 * resolutionX + x2];
+        const topRightRight = values[y1 * resolutionX + x3];
+
+        const top = w0 * topLeftLeft + w1 * topLeft + w2 * topRight + w3 * topRightRight;
+
+        // bottom row (3rd)
+        const bottomLeftLeft = values[y2 * resolutionX + x0];
+        const bottomLeft = values[y2 * resolutionX + x1];
+        const bottomRight = values[y2 * resolutionX + x2];
+        const bottomRightRight = values[y2 * resolutionX + x3];
+
+        const bottom = w0 * bottomLeftLeft + w1 * bottomLeft + w2 * bottomRight + w3 * bottomRightRight;
+
+        // bottom bottom row (4th)
+        const bottomBottomLeftLeft = values[y3 * resolutionX + x0];
+        const bottomBottomLeft = values[y3 * resolutionX + x1];
+        const bottomBottomRight = values[y3 * resolutionX + x2];
+        const bottomBottomRightRight = values[y3 * resolutionX + x3];
+
+        const bottomBottom = w0 * bottomBottomLeftLeft + w1 * bottomBottomLeft + w2 * bottomBottomRight + w3 * bottomBottomRightRight;
+
+        // interpolation of the rows
+        return ww0 * topTop + ww1 * top + ww2 * bottom + ww3 * bottomBottom;
     }
 
     advect(dt, oldVals, resolutionX, resolutionY) {
@@ -161,7 +222,7 @@ class Fluid {
             newY = Math.max(newY, 0);
             newY = Math.min(newY, resolutionY - 1);
 
-            newVals[i] = Fluid.bilinearInterpolation(newX, newY, oldVals, resolutionX, resolutionY);
+            newVals[i] = Fluid.bicubicInterpolation(newX, newY, oldVals, resolutionX, resolutionY);
         }
 
         return newVals;
@@ -185,8 +246,8 @@ class Fluid {
 
     update(dt) {
         this.colorRed = this.advect(dt, this.colorRed, this.resolutionX, this.resolutionY);
-        this.velocitiesX = this.advect(dt, this.velocitiesX, this.resolutionX + 1, this.resolutionY);
-        this.velocitiesY = this.advect(dt, this.velocitiesY, this.resolutionX, this.resolutionY + 1);
+        //this.velocitiesX = this.advect(dt, this.velocitiesX, this.resolutionX + 1, this.resolutionY);
+        //this.velocitiesY = this.advect(dt, this.velocitiesY, this.resolutionX, this.resolutionY + 1);
     }
 
     draw() {
