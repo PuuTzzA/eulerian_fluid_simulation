@@ -156,6 +156,9 @@ function restart() {
     fluid.gravity = gravity;
 
     fluid.draw(); */
+    fluid = new Fluid(10, 10);
+    fluid.initGrid(10, 10);
+    fluid.draw();
 }
 
 function changeResolutionX(newVal) {
