@@ -14,12 +14,12 @@ window.addEventListener("resize", e => {
 
 class GraphicsSettings {
     constructor() {
-        this.lineWidth = 3;
-        this.lineColour = "white";
+        this.lineWidth = 1;
+        this.lineColour = "transparent";
         this.particleSize = 3;
         this.maxSpeed = 10;
         this.maxVelocitySize = 1;
-        this.arrowWidth = 2;
+        this.arrowWidth = 1;
         this.arrowHeadSize = 9;
         this.arrowColor = "red";
     }
@@ -97,670 +97,151 @@ class GraphicsSettings {
     }
 }
 
+class FluidQuantity {
+    constructor(w, h, offsetX, offsetY, cellSize) {
+        this.w = w;
+        this.h = h;
+        this.offsetX = offsetX;
+        this.offsetY = offsetY;
+        this.cellSize = cellSize;
+
+        this.src = new Float64Array(w * h);
+        this.dst = new Float64Array(w * h);
+    }
+
+    flip() {
+        const tmp = this.src;
+        this.src = this.dst;
+        this.dst = tmp;
+    }
+
+    at(x, y) {
+        return this.src[y * this.w + x];
+    }
+
+    id(x, y) {
+        return y * this.w + x;
+    }
+
+    lerp(x, y, t) {
+        return x * (1 - t) + y * t;
+    }
+
+    bilinearInterpolation(x, y) {
+        x = Math.min(Math.max(x - this.offsetX, 0), this.w - 1.00001);
+        y = Math.min(Math.max(y - this.offsetY, 0), this.h - 1.00001);
+
+        const idX = Math.floor(x);
+        const idY = Math.floor(y);
+
+        x -= idX;
+        y -= idY;
+
+        const x00 = this.at(idX + 0, idY + 0);
+        const x10 = this.at(idX + 1, idY + 0);
+        const x01 = this.at(idX + 0, idY + 1);
+        const x11 = this.at(idX + 1, idY + 1);
+
+        return this.lerp(this.lerp(x00, x10, x), this.lerp(x01, x11, x), y);
+    }
+
+    explicitEuler(x, y, dt, velocityX, velocityY) {
+        const uVel = velocityX.bilinearInterpolation(x, y) / this.cellSize;
+        const vVel = velocityY.bilinearInterpolation(x, y) / this.cellSize;
+
+        x -= uVel * dt;
+        y -= vVel * dt;
+
+        return [x, y];
+    }
+
+    advect(dt, u, v) {
+        for (let iy = 0, idx = 0; iy < this.h; iy++) {
+            for (let ix = 0; ix < this.w; ix++, idx++) {
+                let x = ix + this.offsetX;
+                let y = iy + this.offsetY;
+
+                [x, y] = this.explicitEuler(x, y, dt, u, v);
+
+                this.dst[idx] = this.bilinearInterpolation(x, y);
+            }
+        }
+    }
+
+    addInflow(x0, y0, x1, y1, value) {
+        const ix0 = Math.floor(x0 / this.cellSize - this.offsetX);
+        const iy0 = Math.floor(y0 / this.cellSize - this.offsetY);
+        const ix1 = Math.floor(x1 / this.cellSize - this.offsetX);
+        const iy1 = Math.floor(y1 / this.cellSize - this.offsetY);
+
+        for (let y = Math.max(iy0, 0); y < Math.min(iy1, this.h); y++) {
+            for (let x = Math.max(ix0, 0); x < Math.min(ix1, this.w); x++) {
+                if (Math.abs(this.src[y * this.w + x]) < Math.abs(value)) {
+                    this.src[y * this.w + x] = value;
+                }
+            }
+        }
+    }
+}
+
 class Fluid {
-    constructor(resolutionX, resolutionY) {
+    constructor(w, h, density) {
         this.gs = new GraphicsSettings();
 
-        this.resolutionX = resolutionX;
-        this.resolutionY = resolutionY;
+        this.w = w;
+        this.h = h;
+        this.density = density;
+        this.cellSize = 1 / Math.min(w, h);
 
-        this.mousePos = [0, 0];
-        this.mousePosPrev = [0, 0];
-        this.mouseRadius = 100;
-        this.mouseRadiusSquared = this.mouseRadius * this.mouseRadius;
-        this.mousePressed = false;
-        this.mouseForce = 200;
+        this.d = new FluidQuantity(w, h, 0.5, 0.5, this.cellSize);
+        this.u = new FluidQuantity(w + 1, h, 0.0, 0.5, this.cellSize);
+        this.v = new FluidQuantity(w, h + 1, 0.5, 0.0, this.cellSize);
 
-        this.gravity = 2000;
+        this.rhs = new Float64Array(w * h);
+        this.pressure = new Float64Array(w * h);
 
-        canvas.width = window.innerWidth;
-        canvas.height = window.innerHeight;
 
-        this.density = 1000;
-        this.densityReciprocal = 1 / this.density;
-
-        this.pressures = new Float32Array(1);
-        this.levelSet = new Float32Array(1);
-        this.labels = new Int8Array(1);
-        this.negativeDivergence = new Float32Array(1);
-        this.Adiag = new Float32Array(1);
-        this.Ax = new Float32Array(1);
-        this.Ay = new Float32Array(1);
-        this.preconditioner = new Float64Array(1);
-        this.velocitiesX = new Float32Array(1);
-        this.velocitiesY = new Float32Array(1);
-        this.colorRed = new Float32Array(1);
-
-        this.gridSize = 10;
-    }
-
-    setResolutionX(newX) {
-        this.initGrid(parseInt(newX), this.resolutionY);
-    }
-
-    setResolutionY(newY) {
-        this.initGrid(this.resolutionX, parseInt(newY));
-    }
-
-    initGrid(resX, resY) {
-        let shouldX = window.innerWidth / resX;
-        let shouldY = window.innerHeight / resY;
-
-        this.gridSize = Math.min(shouldX, shouldY);
-        this.resolutionX = resX;
-        this.resolutionY = resY;
-
-        this.pressures = new Float32Array(resX * resY);
-        this.levelSet = new Float32Array(resX * resY);
-        this.labels = new Int8Array(resX * resY);
-        this.negativeDivergence = new Float64Array(resX * resY);
-        this.Adiag = new Float64Array(resX * resY);
-        this.Ax = new Float64Array(resX * resY);
-        this.Ay = new Float64Array(resX * resY);
-        this.preconditioner = new Float64Array(resX * resY);
-        this.colorRed = new Float32Array(resX * resY);
-        this.velocitiesX = new Float32Array((resX + 1) * resY);
-        this.velocitiesY = new Float32Array(resX * (resY + 1));
-
-        this.velocitiesX[(resX + 1) * 4 + 3] = 2;
-        this.velocitiesX[(resX + 1) * 5 + 3] = 2;
-        this.velocitiesX[(resX + 1) * 6 + 3] = 2;
-
-        for (let i = 0, n = this.labels.length; i < n; i++) {
-            const x = i % this.resolutionX;
-            const y = Math.floor(i / this.resolutionX);
-
-            if (x == 0 || x == this.resolutionX - 1 || y == this.resolutionY - 1) {
-                this.labels[i] = SOLID;
-            }
-
-            this.levelSet[i] = Fluid.aaSdf(2, 5, 2, 5, x, y);
-        }
-    }
-
-    static aaSdf(x0, x1, y0, y1, x, y) {
-        if (x0 < x && x < x1 && y0 < y && y < y1) {
-            // inside the box
-            return Math.max(x0 - x, x - x1, y0 - y, y - y1);
-        } else {
-            // outside
-            let p, q;
-            if (x < x0) { p = x0; }
-            else if (x > x1) { p = x1; }
-            else { p = x; };
-            if (y < y0) { q = y0; }
-            else if (y > y1) { q = y1; }
-            else { q = y; };
-            return Math.sqrt((x - p) * (x - p) + (y - q) * (y - q));
-        }
-    }
-
-    getVelocityAtPoint(x, y) {
-        const u = Fluid.bilinearInterpolation(x + 0.5, y, this.velocitiesX, this.resolutionX + 1, this.resolutionY);
-        const v = Fluid.bilinearInterpolation(x, y + 0.5, this.velocitiesY, this.resolutionX, this.resolutionY + 1);
-        return [u, v];
-    }
-
-    static bilinearInterpolation(x, y, values, resolutionX, resolutionY) {
-        // Clamp to avoid out-of-bounds access
-        x = Math.max(0, Math.min(x, resolutionX - 1));
-        y = Math.max(0, Math.min(y, resolutionY - 1));
-
-        const x0 = Math.floor(x);
-        const y0 = Math.floor(y);
-        const x1 = Math.min(x0 + 1, resolutionX - 1);
-        const y1 = Math.min(y0 + 1, resolutionY - 1);
-
-        const alpha = x - x0;
-        const beta = y - y0;
-
-        const topLeft = values[y0 * resolutionX + x0];
-        const topRight = values[y0 * resolutionX + x1];
-        const bottomLeft = values[y1 * resolutionX + x0];
-        const bottomRight = values[y1 * resolutionX + x1];
-
-        const top = topLeft * (1 - alpha) + topRight * alpha;
-        const bottom = bottomLeft * (1 - alpha) + bottomRight * alpha;
-
-        return top * (1 - beta) + bottom * beta;
-    }
-
-    static bicubicInterpolation(x, y, values, resolutionX, resolutionY) {
-        x = Math.max(0, Math.min(x, resolutionX - 1));
-        y = Math.max(0, Math.min(y, resolutionY - 1));
-
-        const x1 = Math.floor(x);
-        const y1 = Math.floor(y);
-
-        const x0 = Math.max(x1 - 1, 0);
-        const x2 = Math.min(x1 + 1, resolutionX - 1);
-        const x3 = Math.min(x1 + 2, resolutionX - 1);
-
-        const y0 = Math.max(y1 - 1, 0);
-        const y2 = Math.min(y1 + 1, resolutionY - 1);
-        const y3 = Math.min(y1 + 2, resolutionY - 1);
-
-        const alpha = x - x1;
-        const beta = y - y1;
-
-        // weighing coefficients
-        const w0 = (-1 / 3) * alpha + 0.5 * alpha * alpha - (1 / 6) * alpha * alpha * alpha;
-        const w1 = 1 - alpha * alpha + 0.5 * (alpha * alpha * alpha - alpha);
-        const w2 = alpha + 0.5 * (alpha * alpha - alpha * alpha * alpha);
-        const w3 = (1 / 6) * (alpha * alpha * alpha - alpha);
-
-        const ww0 = (-1 / 3) * beta + 0.5 * beta * beta - (1 / 6) * beta * beta * beta;
-        const ww1 = 1 - beta * beta + 0.5 * (beta * beta * beta - beta);
-        const ww2 = beta + 0.5 * (beta * beta - beta * beta * beta);
-        const ww3 = (1 / 6) * (beta * beta * beta - beta);
-
-        // top top row (1st)
-        const topTopLeftLeft = values[y0 * resolutionX + x0];
-        const topTopLeft = values[y0 * resolutionX + x1];
-        const topTopRight = values[y0 * resolutionX + x2];
-        const topTopRightRight = values[y0 * resolutionX + x3];
-
-        const topTop = w0 * topTopLeftLeft + w1 * topTopLeft + w2 * topTopRight + w3 * topTopRightRight;
-
-        // top row (2nd)
-        const topLeftLeft = values[y1 * resolutionX + x0];
-        const topLeft = values[y1 * resolutionX + x1];
-        const topRight = values[y1 * resolutionX + x2];
-        const topRightRight = values[y1 * resolutionX + x3];
-
-        const top = w0 * topLeftLeft + w1 * topLeft + w2 * topRight + w3 * topRightRight;
-
-        // bottom row (3rd)
-        const bottomLeftLeft = values[y2 * resolutionX + x0];
-        const bottomLeft = values[y2 * resolutionX + x1];
-        const bottomRight = values[y2 * resolutionX + x2];
-        const bottomRightRight = values[y2 * resolutionX + x3];
-
-        const bottom = w0 * bottomLeftLeft + w1 * bottomLeft + w2 * bottomRight + w3 * bottomRightRight;
-
-        // bottom bottom row (4th)
-        const bottomBottomLeftLeft = values[y3 * resolutionX + x0];
-        const bottomBottomLeft = values[y3 * resolutionX + x1];
-        const bottomBottomRight = values[y3 * resolutionX + x2];
-        const bottomBottomRightRight = values[y3 * resolutionX + x3];
-
-        const bottomBottom = w0 * bottomBottomLeftLeft + w1 * bottomBottomLeft + w2 * bottomBottomRight + w3 * bottomBottomRightRight;
-
-        // interpolation of the rows
-        return ww0 * topTop + ww1 * top + ww2 * bottom + ww3 * bottomBottom;
-    }
-
-    advect(dt, oldVals, resolutionX, resolutionY) {
-        let newVals = new Float32Array(resolutionX * resolutionY);
-
-        for (let i = 0, n = newVals.length; i < n; i++) {
-            // if (i != 0) { continue };
-            // Runge Kutta 4
-            const x = i % resolutionX;
-            const y = Math.floor(i / resolutionX);
-
-            const k1 = this.getVelocityAtPoint(x, y);
-            const k2 = this.getVelocityAtPoint(x - k1[0] * dt / 2, y - k1[1] * dt / 2);
-            const k3 = this.getVelocityAtPoint(x - k2[0] * dt / 2, y - k2[1] * dt / 2);
-            const k4 = this.getVelocityAtPoint(x - k3[0] * dt, y - k3[1] * dt);
-
-            let newX = x - (dt / 6) * (k1[0] + 2 * k2[0] + 2 * k3[0] + k4[0]);
-            let newY = y - (dt / 6) * (k1[1] + 2 * k2[1] + 2 * k3[1] + k4[1]);
-
-            newX = Math.max(newX, 0);
-            newX = Math.min(newX, resolutionX - 1);
-            newY = Math.max(newY, 0);
-            newY = Math.min(newY, resolutionY - 1);
-
-            newVals[i] = Fluid.bicubicInterpolation(newX, newY, oldVals, resolutionX, resolutionY);
-        }
-
-        return newVals;
-    }
-
-    updateLabels() {
-        for (let i = 0, n = this.labels.length; i < n; i++) {
-            if (this.labels[i] == SOLID) { continue; }
-
-            if (this.levelSet[i] <= 0) {
-                this.labels[i] = FLUID;
-            } else if (this.levelSet[i] > 0) {
-                this.labels[i] = EMPTY;
-            }
-        }
-    }
-
-    fastSweep2D(distGrid, width, height) {
-        const NSweeps = 4;
-        const h = 1.0;
-        const f = 1.0;
-        const eps = 1e-6;
-
-        const dirX = [
-            [0, width - 1, 1],
-            [width - 1, 0, -1],
-            [width - 1, 0, -1],
-            [0, width - 1, 1]
-        ];
-        const dirY = [
-            [0, height - 1, 1],
-            [0, height - 1, 1],
-            [height - 1, 0, -1],
-            [height - 1, 0, -1]
-        ];
-
-        for (let s = 0; s < NSweeps; s++) {
-            const [x0, x1, xStep] = dirX[s];
-            const [y0, y1, yStep] = dirY[s];
-
-            for (let iy = y0; yStep * iy <= yStep * y1; iy += yStep) {
-                for (let ix = x0; xStep * ix <= xStep * x1; ix += xStep) {
-                    const gridPos = iy * width + ix;
-
-                    // Find min neighbor in x-direction
-                    let ax;
-                    if (ix === 0) {
-                        ax = Math.min(distGrid[gridPos], distGrid[iy * width + (ix + 1)]);
-                    } else if (ix === width - 1) {
-                        ax = Math.min(distGrid[iy * width + (ix - 1)], distGrid[gridPos]);
-                    } else {
-                        ax = Math.min(distGrid[iy * width + (ix - 1)], distGrid[iy * width + (ix + 1)]);
-                    }
-
-                    // Find min neighbor in y-direction
-                    let ay;
-                    if (iy === 0) {
-                        ay = Math.min(distGrid[gridPos], distGrid[(iy + 1) * width + ix]);
-                    } else if (iy === height - 1) {
-                        ay = Math.min(distGrid[(iy - 1) * width + ix], distGrid[gridPos]);
-                    } else {
-                        ay = Math.min(distGrid[(iy - 1) * width + ix], distGrid[(iy + 1) * width + ix]);
-                    }
-
-                    // Solve local Eikonal update
-                    let d_new;
-                    if (Math.abs(ax - ay) < f * h) {
-                        d_new = 0.5 * (ax + ay + Math.sqrt(2 * f * f * h * h - (ax - ay) * (ax - ay)));
-                    } else {
-                        d_new = Math.min(ax, ay) + f * h;
-                    }
-
-                    // Only accept the update if it improves the value
-                    distGrid[gridPos] = Math.min(distGrid[gridPos], d_new);
-                }
-            }
-        }
-    }
-
-    applyBodyForces(dt) {
-        for (let i = 0, n = this.velocitiesY.length; i < n; i++) {
-            this.velocitiesY[i] += this.gravity * dt;
-        }
-    }
-
-    pressureGradientUpdate(dt) {
-        const scale = dt / (this.density * 1) // 1 == dx
-
-        for (let i = 0; i < this.pressures.length; i++) {
-            const x = i % this.resolutionX;
-            const y = Math.floor(i / this.resolutionX);
-
-            // update u
-            if (x > 0 &&
-                (this.labels[y * this.resolutionX + x - 1] == FLUID || this.labels[y * this.resolutionX + x] == FLUID)) {
-
-                if (this.labels[y * this.resolutionX + x - 1] == SOLID || this.labels[y * this.resolutionX + x] == SOLID) {
-                    this.velocitiesX[y * (this.resolutionX + 1) + x] = 0; // u(i, j) = u_solid(i, j)
-                } else {
-                    const p_left = this.pressures[y * this.resolutionX + x - 1];
-                    const p_right = this.pressures[y * this.resolutionX + x];
-                    this.velocitiesX[y * (this.resolutionX + 1) + x] -= scale * (p_right - p_left);
-                }
-            } else {
-                // this.velocitiesX[y * this.resolutionX + x] = UNKNOWN;
-                this.velocitiesX[i] = 0;
-            }
-
-            // update v
-            if (y > 0 &&
-                (this.labels[(y - 1) * this.resolutionX + x] == FLUID || this.labels[y * this.resolutionX + x] == FLUID)) {
-
-                if (this.labels[(y - 1) * this.resolutionX + x] == SOLID || this.labels[y * this.resolutionX + x] == SOLID) {
-                    this.velocitiesY[y * this.resolutionX + x] = 0; // u(i, j) = u_solid(i, j)
-                } else {
-                    const p_top = this.pressures[(y - 1) * this.resolutionX + x];
-                    const p_bottom = this.pressures[y * this.resolutionX + x];
-                    this.velocitiesY[y * this.resolutionX + x] -= scale * (p_bottom - p_top);
-                }
-            } else {
-                // this.velocitiesY[y * this.resolutionX + x] = UNKNOWN;
-                this.velocitiesY[i] = 0;
-            }
-        }
-    }
-
-    calculateNegativeDivergence() {
-        const scale = 1 / 1; // 1/dx
-
-        for (let i = 0, n = this.negativeDivergence.length; i < n; i++) {
-            if (this.labels[i] != FLUID) { continue; }
-
-            const x = i % this.resolutionX;
-            const y = Math.floor(i / this.resolutionX);
-
-            const du = this.velocitiesX[y * this.resolutionX + x + 1] - this.velocitiesX[y * this.resolutionX + x];
-            const dv = this.velocitiesY[(y + 1) * this.resolutionX + x] - this.velocitiesY[y * this.resolutionX + x];
-
-            this.negativeDivergence[i] = -scale * (du + dv);
-
-            if (x > 0 && this.labels[y * this.resolutionX + x - 1] == SOLID) {
-                this.negativeDivergence[i] -= scale * this.velocitiesX[y * this.resolutionX + x] - 0; // u(x, y) - u_solid(x, y)
-            }
-            if (x < this.resolutionX - 1 && this.labels[y * this.resolutionX + x + 1] == SOLID) {
-                this.negativeDivergence[i] += scale * this.velocitiesX[y * this.resolutionX + x + 1] - 0; // u(x, y) - u_solid(x, y)
-            }
-
-            if (y > 0 && this.labels[(y - 1) * this.resolutionX + x] == SOLID) {
-                this.negativeDivergence[i] -= scale * this.velocitiesY[y * this.resolutionX + x] - 0; // v(x, y) - v_solid(x, y)
-            }
-            if (y < this.resolutionY - 1 && this.labels[(y + 1) * this.resolutionX + x] == SOLID) {
-                this.negativeDivergence[i] += scale * this.velocitiesY[(y + 1) * this.resolutionX + x] - 0; // v(x, y) - v_solid(x, y)
-            }
-        }
-    }
-
-    setupA(dt) {
-        const scale = dt / (this.density * 1 * 1); // dt / (density * dx^2)
-        this.Adiag.fill(0);
-        this.Ax.fill(0);
-        this.Ay.fill(0);
-
-        for (let i = 0, n = this.pressures.length; i < n; i++) {
-            if (this.labels[i] == FLUID) {
-                const x = i % this.resolutionX;
-                const y = Math.floor(i / this.resolutionX);
-
-                // negative x neighbour
-                if (x > 0 && this.labels[y * this.resolutionX + x - 1] == FLUID) {
-                    this.Adiag[i] += scale;
-                }
-                else if (x > 0 && this.labels[y * this.resolutionX + x - 1] == EMPTY) {
-                    this.Adiag[i] += scale;
-                }
-                // positive x neighbour
-                if (x < this.resolutionX - 1 && this.labels[y * this.resolutionX + x + 1] == FLUID) {
-                    this.Adiag[i] += scale;
-                    this.Ax[i] = -scale;
-                }
-                else if (x < this.resolutionX - 1 && this.labels[y * this.resolutionX + x + 1] == EMPTY) {
-                    this.Adiag[i] += scale;
-                }
-                // negative y neighbour
-                if (y > 0 && this.labels[(y - 1) * this.resolutionX + x] == FLUID) {
-                    this.Adiag[i] += scale;
-                }
-                else if (y > 0 && this.labels[(y - 1) * this.resolutionX + x] == EMPTY) {
-                    this.Adiag[i] += scale;
-                }
-                // positive y neighbour
-                if (y < this.resolutionY - 1 && this.labels[(y + 1) * this.resolutionX + x] == FLUID) {
-                    this.Adiag[i] += scale;
-                    this.Ay[i] = -scale;
-                }
-                else if (y < this.resolutionY - 1 && this.labels[(y + 1) * this.resolutionX + x] == EMPTY) {
-                    this.Adiag[i] += scale;
-                }
-            }
-        }
-    }
-
-    /**
-    * The infinity norm is the maximum absolute value of a vector.
-    */
-    static infinityNorm(s) {
-        let max = 0;
-
-        for (let i = 0, n = s.length; i < n; i++) {
-            max = Math.max(max, Math.abs(s[i]));
-        }
-
-        return max;
-    }
-
-    static dotProduct(x, y) {
-        let result = 0;
-
-        for (let i = 0, n = x.length; i < n; i++) {
-            result += x[i] * y[i];
-        }
-
-        return result;
-    }
-
-    static addVectors(x, y) {
-        let result = new Float64Array(x.length);
-
-        for (let i = 0, n = x.length; i < n; i++) {
-            result[i] = x[i] + y[i];
-        }
-
-        return result;
-    }
-
-    static subtractVectors(x, y) {
-        let result = new Float64Array(x.length);
-
-        for (let i = 0, n = x.length; i < n; i++) {
-            result[i] = x[i] - y[i];
-        }
-
-        return result;
-    }
-
-    static multiplyScalarVector(a, x) {
-        let result = new Float64Array(x.length);
-
-        for (let i = 0, n = x.length; i < n; i++) {
-            result[i] = a * x[i];
-        }
-
-        return result;
-    }
-
-    /**
-    * multiplies the matrix A with the vector s
-    */
-    applyA(s) {
-        let result = new Float64Array(s.length);
-
-        for (let i = 0, n = s.length; i < n; i++) {
-            const x = i % this.resolutionX;
-            const y = Math.floor(i / this.resolutionX);
-
-            let r = this.Adiag[i] * s[i];
-
-            // neighbour at (x - 1, y)
-            if (x > 0) {
-                r += this.Ax[y * this.resolutionX + x - 1] * s[y * this.resolutionX + x - 1];
-            }
-            // neighbour at (x + 1, y)
-            if (x < this.resolutionX - 1) {
-                r += this.Ax[i] * s[y * this.resolutionX + x + 1];
-            }
-            // neighbour at (x, y - 1)
-            if (y > 0) {
-                r += this.Ay[(y - 1) * this.resolutionX + x] * s[(y - 1) * this.resolutionX + x];
-            }
-            // neighbour at (x, y + 1)
-            if (y < this.resolutionY - 1) {
-                r += this.Ay[i] * s[(y + 1) * this.resolutionX + x];
-            }
-
-            result[i] = r;
-        }
-
-        return result;
-    }
-
-    constructPreconditioner() {
-        const tuningConstant = 0.97;
-        const safetyConstant = 0.25;
-
-        for (let i = 0, n = this.preconditioner.length; i < n; i++) {
-            if (this.labels[i] != FLUID) { continue; }
-
-            const x = i % this.resolutionX;
-            const y = Math.floor(i / this.resolutionX);
-
-            let e = this.Adiag[i];
-
-            if (x > 0) {
-                const s = this.Ax[y * this.resolutionX + x - 1] * this.preconditioner[y * this.resolutionX + x - 1];
-                e -= s * s;
-            }
-            if (y > 0) {
-                const s = this.Ay[(y - 1) * this.resolutionX + x] * this.preconditioner[(y - 1) * this.resolutionX + x];
-                e -= s * s;
-            }
-            if (x > 0 && y > 0) {
-                const t = this.Ax[y * this.resolutionX + x - 1] * this.Ay[y * this.resolutionX + x - 1]
-                    * this.preconditioner[y * this.resolutionX + x - 1] * this.preconditioner[y * this.resolutionX + x - 1]
-                    + this.Ay[(y - 1) * this.resolutionX + x] * this.Ax[(y - 1) * this.resolutionX + x]
-                    * this.preconditioner[(y - 1) * this.resolutionX + x] * this.preconditioner[(y - 1) * this.resolutionX + x];
-
-                e -= tuningConstant * t;
-            }
-
-            if (e < safetyConstant * this.Adiag[i]) {
-                e = this.Adiag[i];
-            }
-            if (e <= 0) { e = 1e-6; }
-            this.preconditioner[i] = 1 / Math.sqrt(e);
-        }
-    }
-
-    applyPreconditioner(r) {
-        // first Lq = r  
-        let q = new Float64Array(r.length);
-
-        for (let i = 0, n = this.preconditioner.length; i < n; i++) {
-            if (this.labels[i] != FLUID) { continue; }
-
-            const x = i % this.resolutionX;
-            const y = Math.floor(i / this.resolutionX);
-
-            let t = r[i];
-
-            if (x > 0) {
-                const index = y * this.resolutionX + x - 1;
-                t -= this.Ax[index] * this.preconditioner[index] * q[index];
-            }
-            if (y > 0) {
-                const index = (y - 1) * this.resolutionX + x;
-                t -= this.Ay[index] * this.preconditioner[index] * q[index];
-            }
-            q[i] = t * this.preconditioner[i];
-        }
-        // solve L^T z = q
-        let z = new Float64Array(q.length);
-
-        for (let i = this.preconditioner.length - 1; i >= 0; i--) {
-            if (this.labels[i] != FLUID) { continue; }
-
-            const x = i % this.resolutionX;
-            const y = Math.floor(i / this.resolutionX);
-
-            let t = q[i];
-
-            if (x < this.resolutionX - 1) {
-                t -= this.Ax[i] * this.preconditioner[i] * z[y * this.resolutionX + x + 1];
-            }
-            if (y < this.resolutionY - 1) {
-                t -= this.Ay[i] * this.preconditioner[i] * z[(y + 1) * this.resolutionX + x];
-            }
-            z[i] = t * this.preconditioner[i];
-        }
-        return z;
-    }
-
-    /**
-    * The preconditioned conjugate gradient (PCG) algorithm for solving Ap = b.
-    */
-    preconditionedConjugateGradient() {
-        let p = new Float64Array(this.negativeDivergence.length);
-
-        let residual = new Float64Array(this.negativeDivergence);
-
-        if (Fluid.infinityNorm(residual) == 0) {
-            return p;
-        }
-
-        let auxiliaryVector = this.applyPreconditioner(residual);
-        let searchVector = new Float64Array(auxiliaryVector);
-
-
-        let sigma = Fluid.dotProduct(residual, auxiliaryVector);
-
-        const maxIter = 200;
-        const tolerance = 1e-6;
-
-        let alpha = 1;
-        let beta = 1;
-
-        for (let _ = 0; _ < maxIter; _++) {
-            auxiliaryVector = this.applyA(searchVector);
-
-            alpha = sigma / Fluid.dotProduct(auxiliaryVector, searchVector);
-
-            p = Fluid.addVectors(p, Fluid.multiplyScalarVector(alpha, searchVector));
-            residual = Fluid.subtractVectors(residual, Fluid.multiplyScalarVector(alpha, auxiliaryVector));
-
-            if (Fluid.infinityNorm(residual) < tolerance) {
-                return p;
-            }
-
-            auxiliaryVector = this.applyPreconditioner(residual);
-
-            const sigmaNew = Fluid.dotProduct(auxiliaryVector, residual);
-            beta = sigmaNew / sigma;
-            searchVector = Fluid.addVectors(auxiliaryVector, Fluid.multiplyScalarVector(beta, searchVector));
-            sigma = sigmaNew;
-        }
-
-        console.log("PCG LIMIT EXCEEDED!-----------------------------------");
-        return p;
-    }
-
-    project(dt) {
-        this.updateLabels();
-
-        this.calculateNegativeDivergence();
-
-        this.setupA(dt);
-
-        this.constructPreconditioner();
-
-        this.pressures = this.preconditionedConjugateGradient();
-
-        this.pressureGradientUpdate(dt);
+        const shouldX = window.innerWidth / w;
+        const shouldY = window.innerHeight / h;
+        this.gridPixelSize = Math.min(shouldX, shouldY);
     }
 
     update(dt) {
-        this.colorRed = this.advect(dt, this.colorRed, this.resolutionX, this.resolutionY);
-        this.levelSet = this.advect(dt, this.levelSet, this.resolutionX, this.resolutionY);
-        this.fastSweep2D(this.levelSet, this.resolutionX, this.resolutionY);
+        this.buildRhs(dt);
+        this.project(600, dt);
+        this.applyPressure(dt);
 
-        // Set u = advect(u, dt)
-        const newVelX = this.advect(dt, this.velocitiesX, this.resolutionX + 1, this.resolutionY);
-        const newVelY = this.advect(dt, this.velocitiesY, this.resolutionX, this.resolutionY + 1);
-        this.velocitiesX = newVelX;
-        this.velocitiesY = newVelY;
+        this.d.advect(dt, this.u, this.v);
+        this.u.advect(dt, this.u, this.v);
+        this.v.advect(dt, this.u, this.v);
 
-        // add u = u + dt * g
-        this.applyBodyForces(dt);
+        this.d.flip();
+        this.u.flip();
+        this.v.flip();
+    }
 
-        // set u = project(dt, u)
-        this.project(dt);
+    addInflow(x, y, w, h, d, u, v) {
+        this.d.addInflow(x, y, x + w, y + h, d);
+        this.u.addInflow(x, y, x + w, y + h, u);
+        this.v.addInflow(x, y, x + w, y + h, v);
+    }
+
+    maxTimestep() {
+        let maxVel = 0;
+        for (let y = 0; y < this.h; y++) {
+            for (let x = 0; x < this.w; x++) {
+
+                const u = this.u.bilinearInterpolation(x + 0.5, y + 0.5);
+                const v = this.v.bilinearInterpolation(x + 0.5, y + 0.5);
+
+                const vel = Math.sqrt(u * u + v * v);
+                maxVel = Math.max(maxVel, vel);
+            }
+        }
+
+        // Fluid should not move more than two grid cells per iteration
+        const maxTimestep = 0.5 * this.cellSize / maxVel;
+        return Math.min(maxTimestep, 1);
     }
 
     draw() {
@@ -770,53 +251,136 @@ class Fluid {
 
         ctx.lineWidth = this.gs.getLineWidth();
 
-        const offsetTop = window.innerHeight - this.gridSize * this.resolutionY;
+        const offsetTop = window.innerHeight - this.gridPixelSize * this.h;
 
+        for (let y = 0; y < this.d.h; y++) {
+            for (let x = 0; x < this.d.w; x++) {
 
-        for (let i = 0, n = this.pressures.length; i < n; i++) {
-            const x = i % this.resolutionX;
-            const y = Math.floor(i / this.resolutionX);
+                ctx.strokeStyle = this.gs.getLineColour();
+                const d = Math.floor(this.d.at(x, y) * 100);
+                ctx.fillStyle = this.gs.getCellColour(d, 0, 0);
 
-            ctx.strokeStyle = this.gs.getLineColour();
-            ctx.fillStyle = this.gs.getCellColour(this.colorRed[i], 0, 0);
+                ctx.strokeRect(x * this.gridPixelSize, y * this.gridPixelSize + offsetTop, this.gridPixelSize, this.gridPixelSize);
+                ctx.fillRect(x * this.gridPixelSize, y * this.gridPixelSize + offsetTop, this.gridPixelSize, this.gridPixelSize);
 
-            ctx.strokeRect(x * this.gridSize, y * this.gridSize + offsetTop, this.gridSize, this.gridSize);
-            ctx.fillRect(x * this.gridSize, y * this.gridSize + offsetTop, this.gridSize, this.gridSize);
-
-            Fluid.hatchRect(x * this.gridSize, y * this.gridSize + offsetTop, this.gridSize, this.gridSize, this.gs.getHatchingSettings(this.labels[i], this.gridSize));
+                // Fluid.hatchRect(x * this.gridSize, y * this.gridSize + offsetTop, this.gridSize, this.gridSize, this.gs.getHatchingSettings(this.labels[i], this.gridSize));
+            }
         }
 
-        // horizontal velocities
-        for (let i = 0, n = this.velocitiesX.length; i < n; i++) {
-            if (Math.abs(this.velocitiesX[i]) < 0.01) continue;
+        return;
 
-            const x = i % (this.resolutionX + 1);
-            const y = Math.floor(i / (this.resolutionX + 1));
+        for (let y = 0; y < this.u.h; y++) {
+            for (let x = 0; x < this.u.w; x++) {
 
-            let fromX = x * this.gridSize;
-            let fromY = (y + 0.5) * this.gridSize + offsetTop;
-            let toX = (x + this.gs.getArrowLength(this.velocitiesX[i])) * this.gridSize;
-            let toY = fromY;
+                if (Math.abs(this.u.at(x, y)) < 0.01) continue;
 
-            let col = i == 0 ? "white" : this.gs.getArrowColor();
-            Fluid.drawArrow(ctx, fromX, fromY, toX, toY, this.gs.getArrowWidth(), this.gs.getArrowHeadSize(), col);
+                let fromX = x * this.gridPixelSize;
+                let fromY = (y + 0.5) * this.gridPixelSize + offsetTop;
+                let toX = (x + this.gs.getArrowLength(this.u.at(x, y))) * this.gridPixelSize;
+                let toY = fromY;
+
+                let col = this.gs.getArrowColor();
+                Fluid.drawArrow(ctx, fromX, fromY, toX, toY, this.gs.getArrowWidth(), this.gs.getArrowHeadSize(), col);
+            }
         }
 
-        // vertical velocities
-        for (let i = 0, n = this.velocitiesY.length; i < n; i++) {
-            if (Math.abs(this.velocitiesY[i]) < 0.01) continue;
+        for (let y = 0; y < this.v.h; y++) {
+            for (let x = 0; x < this.v.w; x++) {
 
-            const x = i % (this.resolutionX);
-            const y = Math.floor(i / (this.resolutionX));
+                if (Math.abs(this.v.at(x, y)) < 0.01) continue;
 
-            let fromX = (x + 0.5) * this.gridSize;
-            let fromY = y * this.gridSize + offsetTop;
-            let toX = fromX;
-            let toY = (y + this.gs.getArrowLength(this.velocitiesY[i])) * this.gridSize + offsetTop;
+                let fromX = (x + 0.5) * this.gridPixelSize;
+                let fromY = y * this.gridPixelSize + offsetTop;
+                let toX = fromX;
+                let toY = (y + this.gs.getArrowLength(this.v.at(x, y))) * this.gridPixelSize + offsetTop;
 
-            let col = i == 0 ? "white" : this.gs.getArrowColor();
+                let col = this.gs.getArrowColor();
 
-            Fluid.drawArrow(ctx, fromX, fromY, toX, toY, this.gs.getArrowWidth(), this.gs.getArrowHeadSize(), col);
+                Fluid.drawArrow(ctx, fromX, fromY, toX, toY, this.gs.getArrowWidth(), this.gs.getArrowHeadSize(), col);
+            }
+        }
+    }
+
+    buildRhs() {
+        // builds the pressure right hand side, meaning the negative divergence
+        const scale = 1 / this.cellSize;
+
+        for (let y = 0, idx = 0; y < this.h; y++) {
+            for (let x = 0; x < this.w; x++, idx++) {
+                const du = this.u.at(x + 1, y) - this.u.at(x, y);
+                const dv = this.v.at(x, y + 1) - this.v.at(x, y);
+                this.rhs[idx] = -scale * (du + dv);
+            }
+        }
+    }
+
+    project(limit, dt) {
+        // gauss seidel iteration
+        const scale = dt / (this.density * this.cellSize * this.cellSize);
+
+        let maxDelta;
+
+        for (let iter = 0; iter < limit; iter++) {
+            maxDelta = 0;
+
+            for (let y = 0, idx = 0; y < this.h; y++) {
+                for (let x = 0; x < this.w; x++, idx++) {
+                    let diag = 0;
+                    let offDiag = 0;
+
+                    if (x > 0) {
+                        diag += scale;
+                        offDiag += scale * this.pressure[idx - 1];
+                    }
+                    if (y > 0) {
+                        diag += scale;
+                        offDiag += scale * this.pressure[idx - this.w];
+                    }
+                    if (x < this.w - 1) {
+                        diag += scale;
+                        offDiag += scale * this.pressure[idx + 1];
+                    }
+                    if (y < this.h - 1) {
+                        diag += scale;
+                        offDiag += scale * this.pressure[idx + this.w];
+                    }
+
+                    const newPressure = (this.rhs[idx] + offDiag) / diag;
+                    maxDelta = Math.max(maxDelta, Math.abs(newPressure - this.pressure[idx]));
+                    this.pressure[idx] = newPressure;
+                }
+            }
+
+            if (maxDelta < 1e-5) {
+                console.log(`Exiting solver after ${iter} iterations`)
+                return;
+            }
+        }
+
+        console.log("EXCEEDED MAXIMUM ITERATIONS");
+    }
+
+    applyPressure(dt) {
+        const scale = dt / (this.density * this.cellSize);
+
+        for (let y = 0, idx = 0; y < this.h; y++) {
+            for (let x = 0; x < this.w; x++, idx++) {
+
+                this.u.src[this.u.id(x, y)] -= scale * this.pressure[idx];
+                this.u.src[this.u.id(x + 1, y)] += scale * this.pressure[idx];
+
+                this.v.src[this.v.id(x, y)] -= scale * this.pressure[idx];
+                this.v.src[this.v.id(x, y + 1)] += scale * this.pressure[idx];
+            }
+        }
+
+        for (let y = 0; y < this.h; y++) {
+            this.u.src[y * (this.w + 1)] = 0;
+            this.u.src[y * (this.w + 1) + this.w] = 0;
+        }
+        for (let x = 0; x < this.w; x++) {
+            this.v.src[x] = 0;
+            this.v.src[this.h * this.w + x] = 0;
         }
     }
 

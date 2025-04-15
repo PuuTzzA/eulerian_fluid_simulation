@@ -53,11 +53,11 @@ document.addEventListener("mousemove", (e) => {
     const offsetTop = window.innerHeight - fluid.gridSize * fluid.resolutionY;
     const y = (e.offsetY - offsetTop) / fluid.gridSize - 0.5;
 
-/*     console.log(x, y, "vel", Fluid.bilinearInterpolation(x, y, fluid.colorRed, fluid.resolutionX, fluid.resolutionY));
-    if (Fluid.bilinearInterpolation(x, y, fluid.colorRed, fluid.resolutionX, fluid.resolutionY) !=
-        Fluid.bilinearInterpolation2(x, y, fluid.colorRed, fluid.resolutionX, fluid.resolutionY)) {
-        console.log("bilinear interpolation error");
-    } */
+    /*     console.log(x, y, "vel", Fluid.bilinearInterpolation(x, y, fluid.colorRed, fluid.resolutionX, fluid.resolutionY));
+        if (Fluid.bilinearInterpolation(x, y, fluid.colorRed, fluid.resolutionX, fluid.resolutionY) !=
+            Fluid.bilinearInterpolation2(x, y, fluid.colorRed, fluid.resolutionX, fluid.resolutionY)) {
+            console.log("bilinear interpolation error");
+        } */
     //console.log(x, y, "vel", fluid.getVelocityAtPoint(x, y));
 })
 
@@ -71,11 +71,21 @@ window.addEventListener("resize", e => {
 const fps = document.getElementById("fps");
 let newFps = 0;
 let accumulatedFps = [];
-
 let running = true;
 let delta = 0.01;
 let previous;
+
+let resolutionX = 1;
+let resolutionY = 1;
+let density = 0.1;
+
 let fluid = new Fluid(1, 1);
+
+const FIX_DELTA = 0.001;
+
+/* fluid.setResolutionX(5);
+fluid.setResolutionY(5);
+fluid.update(FIX_DELTA); */
 fluid.draw();
 
 function toggleDetailedOptions() {
@@ -157,16 +167,27 @@ function restart() {
 
     fluid.draw(); */
     fluid = new Fluid(10, 10);
-    fluid.initGrid(10, 10);
+    //fluid.initGrid(10, 10);
     fluid.draw();
 }
 
+function test() {
+    return [1, 3];
+}
+
 function changeResolutionX(newVal) {
-    fluid.setResolutionX(newVal);
+    resolutionX = parseInt(newVal);
+    fluid = new Fluid(resolutionX, resolutionY, density);
 }
 
 function changeResolutionY(newVal) {
-    fluid.setResolutionY(newVal);
+    resolutionY = parseInt(newVal);
+    fluid = new Fluid(resolutionX, resolutionY, density);
+}
+
+function changeDensity(newVal) {
+    density = parseFloat(newVal);
+    fluid = new Fluid(resolutionX, resolutionY, density);
 }
 
 function drawVelocityChangeX(newVal) {
@@ -207,7 +228,10 @@ function step(now) {
         } */
 
     //running = false;
+    delta = FIX_DELTA;
+
     if (running) {
+        fluid.addInflow(0.45, 0.2, 0.1, 0.01, 1.0, 0.0, 3.0);
         fluid.update(delta);
         fluid.draw(delta);
     }
