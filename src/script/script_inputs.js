@@ -231,7 +231,7 @@ function step(now) {
     delta = FIX_DELTA;
 
     if (running) {
-        fluid.addInflow(0.45, 0.2, 0.1, 0.01, 1.0, 0.0, 3.0);
+        fluid.addInflow(0.45, 0.2, 0.15, 0.03, 1.0, 0.0, 3.0);
         fluid.update(delta);
         fluid.draw(delta);
     }

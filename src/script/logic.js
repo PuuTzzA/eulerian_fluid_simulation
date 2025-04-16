@@ -127,6 +127,22 @@ class FluidQuantity {
         return x * (1 - t) + y * t;
     }
 
+    cerp(a, b, c, d, x) {
+        const xsq = x * x;
+        const xcu = xsq * x;
+
+        const minV = Math.min(a, Math.min(b, Math.min(c, d)));
+        const maxV = Math.max(a, Math.max(b, Math.max(c, d)));
+
+        const t =
+            a * (-(1 / 3) * x + 0.5 * xsq - (1 / 6) * xcu) +
+            b * (1 - xsq + 0.5 * (xcu - x)) +
+            c * (x + 0.5 * (xsq - xcu)) +
+            d * ((1 / 6) * (xcu - x));
+
+        return Math.min(Math.max(t, minV), maxV);
+    }
+
     bilinearInterpolation(x, y) {
         x = Math.min(Math.max(x - this.offsetX, 0), this.w - 1.00001);
         y = Math.min(Math.max(y - this.offsetY, 0), this.h - 1.00001);
@@ -145,6 +161,34 @@ class FluidQuantity {
         return this.lerp(this.lerp(x00, x10, x), this.lerp(x01, x11, x), y);
     }
 
+    bicubicInterpolation(x, y) {
+        x = Math.min(Math.max(x - this.offsetX, 0), this.w - 1.00001);
+        y = Math.min(Math.max(y - this.offsetY, 0), this.h - 1.00001);
+
+        const ix = Math.floor(x);
+        const iy = Math.floor(y);
+
+        x -= ix;
+        y -= iy;
+
+        const x0 = Math.max(ix - 1, 0);
+        const x1 = ix;
+        const x2 = ix + 1;
+        const x3 = Math.min(ix + 2, this.w - 1);
+
+        const y0 = Math.max(iy - 1, 0);
+        const y1 = iy;
+        const y2 = iy + 1;
+        const y3 = Math.min(iy + 2, this.h - 1);
+
+        const q0 = this.cerp(this.at(x0, y0), this.at(x1, y0), this.at(x2, y0), this.at(x3, y0), x);
+        const q1 = this.cerp(this.at(x0, y1), this.at(x1, y1), this.at(x2, y1), this.at(x3, y1), x);
+        const q2 = this.cerp(this.at(x0, y2), this.at(x1, y2), this.at(x2, y2), this.at(x3, y2), x);
+        const q3 = this.cerp(this.at(x0, y3), this.at(x1, y3), this.at(x2, y3), this.at(x3, y3), x);
+
+        return this.cerp(q0, q1, q2, q3, y);
+    }
+
     explicitEuler(x, y, dt, velocityX, velocityY) {
         const uVel = velocityX.bilinearInterpolation(x, y) / this.cellSize;
         const vVel = velocityY.bilinearInterpolation(x, y) / this.cellSize;
@@ -155,17 +199,51 @@ class FluidQuantity {
         return [x, y];
     }
 
+    rungeKutta4(x, y, dt, velocityX, velocityY) {
+        const uk1 = velocityX.bilinearInterpolation(x, y) / this.cellSize;
+        const vk1 = velocityY.bilinearInterpolation(x, y) / this.cellSize;
+        const xk1 = x - 0.5 * dt * uk1;
+        const yk1 = y - 0.5 * dt * vk1;
+
+        const uk2 = velocityX.bilinearInterpolation(xk1, yk1) / this.cellSize;
+        const vk2 = velocityY.bilinearInterpolation(xk1, yk1) / this.cellSize;
+        const xk2 = x - 0.5 * dt * uk2;
+        const yk2 = y - 0.5 * dt * vk2;
+
+        const uk3 = velocityX.bilinearInterpolation(xk2, yk2) / this.cellSize;
+        const vk3 = velocityY.bilinearInterpolation(xk2, yk2) / this.cellSize;
+        const xk3 = x - dt * uk3;
+        const yk3 = y - dt * vk3;
+
+        const uk4 = velocityX.bilinearInterpolation(xk3, yk3) / this.cellSize;
+        const vk4 = velocityY.bilinearInterpolation(xk3, yk3) / this.cellSize;
+
+        x -= dt / 6 * (uk1 + 2 * uk2 + 2 * uk3 + uk4);
+        y -= dt / 6 * (vk1 + 2 * vk2 + 2 * vk3 + vk4);
+
+        return [x, y];
+    }
+
     advect(dt, u, v) {
         for (let iy = 0, idx = 0; iy < this.h; iy++) {
             for (let ix = 0; ix < this.w; ix++, idx++) {
                 let x = ix + this.offsetX;
                 let y = iy + this.offsetY;
 
-                [x, y] = this.explicitEuler(x, y, dt, u, v);
+                [x, y] = this.rungeKutta4(x, y, dt, u, v);
 
-                this.dst[idx] = this.bilinearInterpolation(x, y);
+                this.dst[idx] = this.bicubicInterpolation(x, y);
             }
         }
+    }
+
+    static cubicPulse(x) {
+        x = Math.min(Math.abs(x), 1);
+        return 1 - x * x * (3 - 2 * x);
+    }
+
+    static length(x, y) {
+        return Math.sqrt(x * x + y * y);
     }
 
     addInflow(x0, y0, x1, y1, value) {
@@ -176,8 +254,16 @@ class FluidQuantity {
 
         for (let y = Math.max(iy0, 0); y < Math.min(iy1, this.h); y++) {
             for (let x = Math.max(ix0, 0); x < Math.min(ix1, this.w); x++) {
-                if (Math.abs(this.src[y * this.w + x]) < Math.abs(value)) {
-                    this.src[y * this.w + x] = value;
+
+                const l = FluidQuantity.length(
+                    (2 * (x + 0.5) * this.cellSize - (x0 + x1)) / (x1 - x0),
+                    (2 * (y + 0.5) * this.cellSize - (y0 + y1)) / (y1 - y0)
+                )
+
+                const vi = FluidQuantity.cubicPulse(l) * value;
+
+                if (Math.abs(this.src[y * this.w + x]) < Math.abs(vi)) {
+                    this.src[y * this.w + x] = vi;
                 }
             }
         }
