@@ -166,7 +166,7 @@ function restart() {
     fluid.gravity = gravity;
 
     fluid.draw(); */
-    fluid = new Fluid(10, 10);
+    fluid = new Fluid(resolutionX, resolutionY, density);
     //fluid.initGrid(10, 10);
     fluid.draw();
 }
@@ -202,6 +202,26 @@ function drawRedChange(newVal) {
     drawRed = newVal;
 }
 
+let frameCount = 0;
+
+function saveCanvasAsPng(filename = "frame.png") {
+    const canvas = document.getElementById("canvas");
+
+    canvas.toBlob(function (blob) {
+        const a = document.createElement("a");
+        document.body.appendChild(a);
+        a.style = "display: none";
+
+        const url = window.URL.createObjectURL(blob);
+        a.href = url;
+        a.download = filename;
+        a.click();
+
+        window.URL.revokeObjectURL(url);
+        document.body.removeChild(a);
+    }, "image/png");
+}
+
 function step(now) {
     if (!previous) { previous = now; };
 
@@ -233,7 +253,14 @@ function step(now) {
     if (running) {
         fluid.addInflow(0.45, 0.2, 0.15, 0.03, 1.0, 0.0, 3.0);
         fluid.update(delta);
+
         fluid.draw(delta);
+
+/*         if (frameCount % 100 === 0) {
+            saveCanvasAsPng(`frames/gs${String(frameCount).padStart(6, '0')}.png`);
+        } */
+
+        frameCount++;
     }
 
     requestAnimationFrame(step);

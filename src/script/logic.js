@@ -286,6 +286,12 @@ class Fluid {
         this.rhs = new Float64Array(w * h);
         this.pressure = new Float64Array(w * h);
 
+        this.z = new Float64Array(w * h);
+        this.s = new Float64Array(w * h);
+        this.aDiag = new Float64Array(w * h);
+        this.aPlusX = new Float64Array(w * h);
+        this.aPlusY = new Float64Array(w * h);
+        this.precon = new Float64Array(w * h);
 
         const shouldX = window.innerWidth / w;
         const shouldY = window.innerHeight / h;
@@ -294,7 +300,7 @@ class Fluid {
 
     update(dt) {
         this.buildRhs(dt);
-        this.project(600, dt);
+        this.projectConjugateGradient(600, dt);
         this.applyPressure(dt);
 
         this.d.advect(dt, this.u, this.v);
@@ -328,6 +334,265 @@ class Fluid {
         // Fluid should not move more than two grid cells per iteration
         const maxTimestep = 0.5 * this.cellSize / maxVel;
         return Math.min(maxTimestep, 1);
+    }
+
+    buildRhs() {
+        // builds the pressure right hand side, meaning the negative divergence
+        const scale = 1 / this.cellSize;
+
+        for (let y = 0, idx = 0; y < this.h; y++) {
+            for (let x = 0; x < this.w; x++, idx++) {
+                const du = this.u.at(x + 1, y) - this.u.at(x, y);
+                const dv = this.v.at(x, y + 1) - this.v.at(x, y);
+                this.rhs[idx] = -scale * (du + dv);
+            }
+        }
+    }
+
+    buildPressureMatrix(dt) {
+        const scale = dt / (this.density * this.cellSize * this.cellSize);
+
+        this.aDiag.fill(0);
+
+        for (let y = 0, idx = 0; y < this.h; y++) {
+            for (let x = 0; x < this.w; x++, idx++) {
+                if (x < this.w - 1) {
+                    this.aDiag[idx] += scale;
+                    this.aDiag[idx + 1] += scale;
+                    this.aPlusX[idx] = -scale;
+                } else {
+                    this.aPlusX[idx] = 0;
+                }
+                if (y < this.h - 1) {
+                    this.aDiag[idx] += scale;
+                    this.aDiag[idx + this.w] += scale;
+                    this.aPlusY[idx] = -scale;
+                } else {
+                    this.aPlusY[idx] = 0;
+                }
+            }
+        }
+    }
+
+    buildPreconditioner() {
+        const tau = 0.97;
+        const sigma = 0.25;
+
+        for (let y = 0, idx = 0; y < this.h; y++) {
+            for (let x = 0; x < this.w; x++, idx++) {
+                let e = this.aDiag[idx];
+
+                if (x > 0) {
+                    const px = this.aPlusX[idx - 1] * this.precon[idx - 1];
+                    const py = this.aPlusY[idx - 1] * this.precon[idx - 1];
+                    e = e - (px * px + tau * px * py);
+                }
+                if (y > 0) {
+                    const px = this.aPlusX[idx - this.w] * this.precon[idx - this.w];
+                    const py = this.aPlusY[idx - this.w] * this.precon[idx - this.w];
+                    e = e - (py * py + tau * px * py);
+                }
+
+                if (e < sigma * this.aDiag[idx]) {
+                    e = this.aDiag[idx];
+                }
+                if (e < 1e-6) {
+                    e = 1e-6;
+                }
+                this.precon[idx] = 1 / Math.sqrt(e);
+            }
+        }
+    }
+
+    applyPreconditioner(dst, a) {
+        // applies preconditioner to vector 'a' and stores it in 'dst'
+        // first Lq = r  
+        for (let y = 0, idx = 0; y < this.h; y++) {
+            for (let x = 0; x < this.w; x++, idx++) {
+                let t = a[idx];
+
+                if (x > 0) {
+                    t -= this.aPlusX[idx - 1] * this.precon[idx - 1] * dst[idx - 1];
+                }
+                if (y > 0) {
+                    t -= this.aPlusY[idx - this.w] * this.precon[idx - this.w] * dst[idx - this.w];
+                }
+
+                dst[idx] = t * this.precon[idx];
+            }
+        }
+
+        // solve L^T z = q
+        for (let y = this.h - 1, idx = this.w * this.h - 1; y >= 0; y--) {
+            for (let x = this.w - 1; x >= 0; x--, idx--) {
+                let t = dst[idx];
+
+                if (x < this.w - 1) {
+                    t -= this.aPlusX[idx] * this.precon[idx] * dst[idx + 1];
+                }
+                if (y < this.h - 1) {
+                    t -= this.aPlusY[idx] * this.precon[idx] * dst[idx + this.w];
+                }
+
+                dst[idx] = t * this.precon[idx];
+            }
+        }
+    }
+
+    dotProduct(a, b) {
+        let sum = 0;
+        for (let i = 0; i < a.length; i++) {
+            sum += a[i] * b[i];
+        }
+        return sum;
+    }
+
+    applyA(dst, b) {
+        // multipliers internal pressure matrix (A) with vecotr 'b' and stores the result in 'dst'
+        for (let y = 0, idx = 0; y < this.h; y++) {
+            for (let x = 0; x < this.w; x++, idx++) {
+                let t = this.aDiag[idx] * b[idx];
+
+                if (x > 0) {
+                    t += this.aPlusX[idx - 1] * b[idx - 1];
+                }
+                if (x < this.w - 1) {
+                    t += this.aPlusX[idx] * b[idx + 1];
+                }
+                if (y > 0) {
+                    t += this.aPlusY[idx - this.w] * b[idx - this.w];
+                }
+                if (y < this.h - 1) {
+                    t += this.aPlusY[idx] * b[idx + this.w];
+                }
+                dst[idx] = t;
+            }
+        }
+    }
+
+    scaledAdd(dst, a, b, s) {
+        // 'dst' = 'a' + s * 'b'
+        for (let i = 0; i < dst.length; i++) {
+            dst[i] = a[i] + s * b[i];
+        }
+    }
+
+    infinityNorm(a) {
+        // returns the infinity norm of vector 'a'
+        let max = 0;
+        for (let i = 0; i < a.length; i++) {
+            max = Math.max(max, Math.abs(a[i]));
+        }
+        return max;
+    }
+
+    projectGaussSeidel(limit, dt) {
+        // gauss seidel iteration
+        const scale = dt / (this.density * this.cellSize * this.cellSize);
+
+        let maxDelta;
+
+        for (let iter = 0; iter < limit; iter++) {
+            maxDelta = 0;
+
+            for (let y = 0, idx = 0; y < this.h; y++) {
+                for (let x = 0; x < this.w; x++, idx++) {
+                    let diag = 0;
+                    let offDiag = 0;
+
+                    if (x > 0) {
+                        diag += scale;
+                        offDiag += scale * this.pressure[idx - 1];
+                    }
+                    if (y > 0) {
+                        diag += scale;
+                        offDiag += scale * this.pressure[idx - this.w];
+                    }
+                    if (x < this.w - 1) {
+                        diag += scale;
+                        offDiag += scale * this.pressure[idx + 1];
+                    }
+                    if (y < this.h - 1) {
+                        diag += scale;
+                        offDiag += scale * this.pressure[idx + this.w];
+                    }
+
+                    const newPressure = (this.rhs[idx] + offDiag) / diag;
+                    maxDelta = Math.max(maxDelta, Math.abs(newPressure - this.pressure[idx]));
+                    this.pressure[idx] = newPressure;
+                }
+            }
+
+            if (maxDelta < 1e-5) {
+                console.log(`Exiting solver after ${iter} iterations`)
+                return;
+            }
+        }
+
+        console.log("EXCEEDED MAXIMUM ITERATIONS");
+    }
+
+    projectConjugateGradient(limit, dt) {
+        this.buildPressureMatrix(dt);
+        this.buildPreconditioner();
+
+        this.pressure.fill(0);
+        this.applyPreconditioner(this.z, this.rhs);
+        this.s.set(this.z);
+
+        let maxError = this.infinityNorm(this.rhs);
+        if (maxError < 1e-5) {
+            console.log("Exiting solver, no pressure needed")
+            return;
+        }
+
+        let sigma = this.dotProduct(this.z, this.rhs);
+
+        for (let iter = 0; iter < limit; iter++) {
+            this.applyA(this.z, this.s);
+            let alpha = sigma / this.dotProduct(this.z, this.s);
+
+            this.scaledAdd(this.pressure, this.pressure, this.s, alpha);
+            this.scaledAdd(this.rhs, this.rhs, this.z, -alpha);
+
+            maxError = this.infinityNorm(this.rhs);
+            if (maxError < 1e-5) {
+                console.log(`Exiting solver after ${iter} iterations`)
+                return;
+            }
+
+            this.applyPreconditioner(this.z, this.rhs);
+
+            const sigmaNew = this.dotProduct(this.z, this.rhs);
+            this.scaledAdd(this.s, this.z, this.s, sigmaNew / sigma);
+            sigma = sigmaNew;
+        }
+
+        console.log("EXCEEDED MAXIMUM ITERATIONS");
+    }
+
+    applyPressure(dt) {
+        const scale = dt / (this.density * this.cellSize);
+
+        for (let y = 0, idx = 0; y < this.h; y++) {
+            for (let x = 0; x < this.w; x++, idx++) {
+
+                this.u.src[this.u.id(x, y)] -= scale * this.pressure[idx];
+                this.u.src[this.u.id(x + 1, y)] += scale * this.pressure[idx];
+
+                this.v.src[this.v.id(x, y)] -= scale * this.pressure[idx];
+                this.v.src[this.v.id(x, y + 1)] += scale * this.pressure[idx];
+            }
+        }
+
+        for (let y = 0; y < this.h; y++) {
+            this.u.src[y * (this.w + 1)] = 0;
+            this.u.src[y * (this.w + 1) + this.w] = 0;
+        }
+        for (let x = 0; x < this.w; x++) {
+            this.v.src[x] = 0;
+            this.v.src[this.h * this.w + x] = 0;
+        }
     }
 
     draw() {
@@ -384,89 +649,6 @@ class Fluid {
 
                 Fluid.drawArrow(ctx, fromX, fromY, toX, toY, this.gs.getArrowWidth(), this.gs.getArrowHeadSize(), col);
             }
-        }
-    }
-
-    buildRhs() {
-        // builds the pressure right hand side, meaning the negative divergence
-        const scale = 1 / this.cellSize;
-
-        for (let y = 0, idx = 0; y < this.h; y++) {
-            for (let x = 0; x < this.w; x++, idx++) {
-                const du = this.u.at(x + 1, y) - this.u.at(x, y);
-                const dv = this.v.at(x, y + 1) - this.v.at(x, y);
-                this.rhs[idx] = -scale * (du + dv);
-            }
-        }
-    }
-
-    project(limit, dt) {
-        // gauss seidel iteration
-        const scale = dt / (this.density * this.cellSize * this.cellSize);
-
-        let maxDelta;
-
-        for (let iter = 0; iter < limit; iter++) {
-            maxDelta = 0;
-
-            for (let y = 0, idx = 0; y < this.h; y++) {
-                for (let x = 0; x < this.w; x++, idx++) {
-                    let diag = 0;
-                    let offDiag = 0;
-
-                    if (x > 0) {
-                        diag += scale;
-                        offDiag += scale * this.pressure[idx - 1];
-                    }
-                    if (y > 0) {
-                        diag += scale;
-                        offDiag += scale * this.pressure[idx - this.w];
-                    }
-                    if (x < this.w - 1) {
-                        diag += scale;
-                        offDiag += scale * this.pressure[idx + 1];
-                    }
-                    if (y < this.h - 1) {
-                        diag += scale;
-                        offDiag += scale * this.pressure[idx + this.w];
-                    }
-
-                    const newPressure = (this.rhs[idx] + offDiag) / diag;
-                    maxDelta = Math.max(maxDelta, Math.abs(newPressure - this.pressure[idx]));
-                    this.pressure[idx] = newPressure;
-                }
-            }
-
-            if (maxDelta < 1e-5) {
-                console.log(`Exiting solver after ${iter} iterations`)
-                return;
-            }
-        }
-
-        console.log("EXCEEDED MAXIMUM ITERATIONS");
-    }
-
-    applyPressure(dt) {
-        const scale = dt / (this.density * this.cellSize);
-
-        for (let y = 0, idx = 0; y < this.h; y++) {
-            for (let x = 0; x < this.w; x++, idx++) {
-
-                this.u.src[this.u.id(x, y)] -= scale * this.pressure[idx];
-                this.u.src[this.u.id(x + 1, y)] += scale * this.pressure[idx];
-
-                this.v.src[this.v.id(x, y)] -= scale * this.pressure[idx];
-                this.v.src[this.v.id(x, y + 1)] += scale * this.pressure[idx];
-            }
-        }
-
-        for (let y = 0; y < this.h; y++) {
-            this.u.src[y * (this.w + 1)] = 0;
-            this.u.src[y * (this.w + 1) + this.w] = 0;
-        }
-        for (let x = 0; x < this.w; x++) {
-            this.v.src[x] = 0;
-            this.v.src[this.h * this.w + x] = 0;
         }
     }
 
