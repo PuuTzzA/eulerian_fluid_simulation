@@ -157,6 +157,75 @@ function rotate(x, y, phi) {
 }
 
 /**
+ * For three corners in a 1x1 square, with 'in' being inside the fluid, and adjacent to 
+ * to 'out1' and 'out2'. All three values are distances to a surface.
+ * Returns fraction of the full square occupied by the surface in the specific triangle.
+ */
+function triangleOccupancy(out1, in1, out2) {
+    return 0.5 * in1 * in1 / ((out1 - in1) * (out2 - in1));
+}
+
+/**
+ * For four courners in a 1x1 square (two inside, two outside)
+ * Returns fraction of the square occupied by the surface.
+ */
+function trapezoidOccupancy(out1, out2, in1, in2) {
+    return 0.5 * (-in1 / (out1 - in1) - in2 / (out2 - in2));
+}
+
+/**
+ * given the distance of four corner points of a 1x1 square, returns the 
+ * area of the part of the square occupied by the surface.
+ */
+function occupancy(d11, d12, d21, d22) {
+    const ds = [d11, d12, d22, d21];
+    let mask = 0;
+    for (let i = 3; i >= 0; i--) {
+        mask = (mask << 1) | (ds[i] < 0 ? 1 : 0);
+    }
+    // mask now is D21 D22 D12 D11 whre DXX is 0 if inside, 1 if outside
+    switch (mask) {
+        case 0b0000: // all outside
+            return 0;
+        // one inside
+        case 0b0001:
+            return triangleOccupancy(d21, d11, d12);
+        case 0b0010:
+            return triangleOccupancy(d11, d12, d22);
+        case 0b0100:
+            return triangleOccupancy(d12, d22, d21);
+        case 0b1000:
+            return triangleOccupancy(d22, d21, d11);
+        // one outside
+        case 0b1110:
+            return 1 - triangleOccupancy(-d21, -d11, -d12);
+        case 0b1101:
+            return 1 - triangleOccupancy(-d11, -d12, -d22);
+        case 0b1011:
+            return 1 - triangleOccupancy(-d12, -d22, -d21);
+        case 0b0111:
+            return 1 - triangleOccupancy(-d22, -d21, -d11);
+        // two adjacent inside
+        case 0b0011:
+            return trapezoidOccupancy(d21, d22, d11, d12);
+        case 0b0110:
+            return trapezoidOccupancy(d11, d21, d12, d22);
+        case 0b1100:
+            return trapezoidOccupancy(d11, d12, d21, d22);
+        case 0b1001:
+            return trapezoidOccupancy(d12, d22, d11, d21);
+        // two opposed inside
+        case 0b0101:
+            return triangleOccupancy(d21, d11, d12) + triangleOccupancy(d12, d22, d21);
+        case 0b1010:
+            return triangleOccupancy(d11, d12, d22) + triangleOccupancy(d12, d22, d21);
+        // all inside
+        case 0b1111:
+            return 1;
+    }
+}
+
+/**
  * abstract class for solid body
  */
 class SolidBody {
@@ -221,11 +290,15 @@ class SolidBody {
     }
 
     velocityX(x, y) {
-        return (this.posY - y) * this.velTheta + this.velX;
+        x -= this.posX;
+        y -= this.posY;
+        return this.velX - y * this.velTheta;
     }
 
     velocityY(x, y) {
-        return (x - this.posX) * this.velTheta + this.velY;
+        x -= this.posX;
+        y -= this.posY;
+        return this.velY + x * this.velTheta;
     }
 
     velocity(x, y) {
@@ -354,12 +427,18 @@ class FluidQuantity {
         this.src = new Float64Array(w * h);
         this.dst = new Float64Array(w * h);
 
+        this.phi = new Float64Array((w + 1) * (h + 1)); // distance field, samples are offset by (-0.5, -0.5) and the grid is larger in each dimension, so that every src has 4 phi values 
+        this.volume = new Float64Array(w * h); // fractional cell volume occupied by the fluid
+
         this.normalX = new Float64Array(w * h);
         this.normalY = new Float64Array(w * h);
 
-        this.cell = new Uint8Array(w * h); // Fluid or solid cell
+        this.cell = new Uint8Array(w * h); // Fluid or solid cell (only solid if cell completely covered by bodies)
         this.body = new Uint8Array(w * h); // specifies the index of the solid body closest to a grid cell
         this.mask = new Uint8Array(w * h); // auxiliary array for extrapolation
+
+        this.cell.fill(CELL_FLUID);
+        this.volume.fill(1);
     }
 
     flip() {
@@ -374,6 +453,10 @@ class FluidQuantity {
 
     id(x, y) {
         return y * this.w + x;
+    }
+
+    volumeAt(x, y) {
+        return this.volume[y * this.w + x];
     }
 
     lerp(x, y, t) {
@@ -533,10 +616,23 @@ class FluidQuantity {
     }
 
     /**
-     * fills all solid related fields (cell, body and normalX/Y)
+     * fills all solid related fields (phi, volume, cell, body and normalX/Y)
      */
     fillSolidFields(bodies) {
         if (bodies.length == 0) return;
+
+        // compute distance field first
+        for (let iy = 0, idx = 0; iy <= this.h; iy++) {
+            for (let ix = 0; ix <= this.w; ix++, idx++) {
+                const x = (ix + this.offsetX - 0.5) * this.cellSize;
+                const y = (iy + this.offsetY - 0.5) * this.cellSize;
+
+                this.phi[idx] = bodies[0].distance(x, y);
+                for (let i = 1; i < bodies.length; i++) {
+                    this.phi[idx] = Math.min(this.phi[idx], bodies[i].distance(x, y));
+                }
+            }
+        }
 
         for (let iy = 0, idx = 0; iy < this.h; iy++) {
             for (let ix = 0; ix < this.w; ix++, idx++) {
@@ -554,11 +650,23 @@ class FluidQuantity {
                     }
                 }
 
-                this.cell[idx] = d < 0 ? CELL_SOLID : CELL_FLUID;
+                // compute cell volume from the four adjacent distance values
+                const idxp = iy * (this.w + 1) + ix;
+                this.volume[idx] = 1 - occupancy(
+                    this.phi[idxp], this.phi[idxp + 1],
+                    this.phi[idxp + this.w + 1], this.phi[idxp + this.w + 2]
+                );
+
+                if (this.volume[idx] < 0.01) {
+                    this.volume[idx] = 0;
+                }
+
                 let nx, ny;
                 [nx, ny] = bodies[this.body[idx]].distanceNormal(x, y);
                 this.normalX[idx] = nx;
                 this.normalY[idx] = ny;
+
+                this.cell[idx] = this.volume[idx] == 0 ? CELL_SOLID : CELL_FLUID;
             }
         }
     }
@@ -633,7 +741,7 @@ class FluidQuantity {
             }
         }
 
-        while (!border.length == 0) {
+        while (border.length != 0) {
             const idx = border.pop();
 
             // solve for the value in cell
@@ -693,10 +801,24 @@ class Fluid {
         this.u.fillSolidFields(this.bodies);
         this.v.fillSolidFields(this.bodies);
 
+
+
+        /*         let x = this.mouseX * this.cellSize;
+                let y = this.mouseY * this.cellSize;
+        
+                let velx = this.bodies[0].velocityY(x, y);
+        
+                console.log(velx);
+        
+                return
+         */
+
         this.setBoundaryCondition();
 
         this.buildRhs(dt);
-        this.projectConjugateGradient(2000, dt);
+        this.buildPressureMatrix(dt);
+        this.buildPreconditioner();
+        this.projectConjugateGradient(2000);
         this.applyPressure(dt);
 
         this.ink.extrapolate();
@@ -738,17 +860,37 @@ class Fluid {
         return Math.min(maxTimestep, 1);
     }
 
+    /**
+     * Builds the pressure right hand side, meaning the negative divergence.
+     * "Blend" between solid and fluid velocity based on the cell volume.
+     */
     buildRhs() {
-        // builds the pressure right hand side, meaning the negative divergence
-        const scale = 1 / this.cellSize;
         const cell = this.ink.cell;
+        const body = this.ink.body;
 
         for (let y = 0, idx = 0; y < this.h; y++) {
             for (let x = 0; x < this.w; x++, idx++) {
                 if (cell[idx] == CELL_FLUID) {
-                    const du = this.u.at(x + 1, y) - this.u.at(x, y);
-                    const dv = this.v.at(x, y + 1) - this.v.at(x, y);
-                    this.rhs[idx] = -scale * (du + dv);
+
+                    let e = 0;
+                    if (x > 0 && cell[idx - 1] == CELL_FLUID) {
+                        e += this.u.volumeAt(x, y) * this.u.at(x, y);
+                        e += (1 - this.u.volumeAt(x, y)) * this.bodies[this.u.body[this.u.id(x, y)]].velocityX((x - 0.5) * this.cellSize, y * this.cellSize);
+                    }
+                    if (y > 0 && cell[idx - this.w] == CELL_FLUID) {
+                        e += this.v.volumeAt(x, y) * this.v.at(x, y);
+                        e += (1 - this.v.volumeAt(x, y)) * this.bodies[this.v.body[this.v.id(x, y)]].velocityY(x * this.cellSize, (y - 0.5) * this.cellSize);
+                    }
+                    if (x < this.w - 1 && cell[idx + 1] == CELL_FLUID) {
+                        e -= this.u.volumeAt(x + 1, y) * this.u.at(x + 1, y);
+                        e -= (1 - this.u.volumeAt(x + 1, y)) * this.bodies[this.u.body[this.u.id(x + 1, y)]].velocityX((x + 0.5) * this.cellSize, y * this.cellSize);
+                    }
+                    if (y < this.h - 1 && cell[idx + this.w] == CELL_FLUID) {
+                        e -= this.v.volumeAt(x, y + 1) * this.v.at(x, y + 1);
+                        e -= (1 - this.v.volumeAt(x, y + 1)) * this.bodies[this.v.body[this.v.id(x, y + 1)]].velocityY(x * this.cellSize, (y + 0.5) * this.cellSize);
+                    }
+
+                    this.rhs[idx] = e;
                 } else {
                     this.rhs[idx] = 0;
                 }
@@ -756,8 +898,11 @@ class Fluid {
         }
     }
 
+    /**
+     * Builds the pressure matrix (A)
+     */
     buildPressureMatrix(dt) {
-        const scale = dt / (this.density * this.cellSize * this.cellSize);
+        const scale = dt / (this.density * this.cellSize);
         const cell = this.ink.cell;
 
         this.aDiag.fill(0);
@@ -770,14 +915,16 @@ class Fluid {
                     continue;
                 }
                 if (x < this.w - 1 && cell[idx + 1] == CELL_FLUID) {
-                    this.aDiag[idx] += scale;
-                    this.aDiag[idx + 1] += scale;
-                    this.aPlusX[idx] = -scale;
+                    const factor = scale * this.u.volumeAt(x + 1, y);
+                    this.aDiag[idx] += factor;
+                    this.aDiag[idx + 1] += factor;
+                    this.aPlusX[idx] = -factor;
                 }
                 if (y < this.h - 1 && cell[idx + this.w] == CELL_FLUID) {
-                    this.aDiag[idx] += scale;
-                    this.aDiag[idx + this.w] += scale;
-                    this.aPlusY[idx] = -scale;
+                    const factor = scale * this.v.volumeAt(x, y + 1);
+                    this.aDiag[idx] += factor;
+                    this.aDiag[idx + this.w] += factor;
+                    this.aPlusY[idx] = -factor;
                 }
             }
         }
@@ -926,10 +1073,7 @@ class Fluid {
         console.log("EXCEEDED MAXIMUM ITERATIONS");
     }
 
-    projectConjugateGradient(limit, dt) {
-        this.buildPressureMatrix(dt);
-        this.buildPreconditioner();
-
+    projectConjugateGradient(limit) {
         this.pressure.fill(0);
         this.applyPreconditioner(this.z, this.rhs);
         this.s.set(this.z);
@@ -963,6 +1107,8 @@ class Fluid {
         }
 
         console.log("EXCEEDED MAXIMUM ITERATIONS");
+        /*         console.log(this.rhs);
+                console.log(this.aDiag); */
     }
 
     applyPressure(dt) {
@@ -995,7 +1141,7 @@ class Fluid {
                     const b = this.bodies[body[idx]];
 
                     this.u.src[this.u.id(x, y)] = b.velocityX(x * this.cellSize, (y + 0.5) * this.cellSize);
-                    this.v.src[this.v.id(x, y)] = b.velocityY((x + 0.5) * this.cellSize, y + this.cellSize);
+                    this.v.src[this.v.id(x, y)] = b.velocityY((x + 0.5) * this.cellSize, y * this.cellSize);
                     this.u.src[this.u.id(x + 1, y)] = b.velocityX((x + 1) * this.cellSize, (y + 0.5) * this.cellSize);
                     this.v.src[this.v.id(x, y + 1)] = b.velocityY((x + 0.5) * this.cellSize, (y + 1) * this.cellSize);
                 }
@@ -1026,9 +1172,20 @@ class Fluid {
 
                 ctx.strokeStyle = this.gs.getLineColour();
                 const d = Math.floor(this.ink.at(x, y) * 100);
-                ctx.fillStyle = this.gs.getCellColour(d, 0, 0);
 
-                ctx.fillStyle = this.ink.cell[y * this.w + x] == CELL_SOLID ? "blue" : this.gs.getCellColour(d, 0, 0);
+                const ink = this.ink.at(x, y) * 100;
+                const solids = (1 - this.ink.volumeAt(x, y)) * 200;
+
+                ctx.fillStyle = this.gs.getCellColour(ink - solids, 0, solids);
+
+                /* let lkj = this.ink.phi[(this.w + 1) * y + x] * 1000;
+
+                if (lkj <= 0){
+                    ctx.fillStyle = this.gs.getCellColour(-lkj, 0, 0);
+                }else{
+                    ctx.fillStyle = this.gs.getCellColour(0, 0, lkj);
+                } */
+
 
                 ctx.strokeRect(x * this.gridPixelSize, y * this.gridPixelSize + offsetTop, this.gridPixelSize, this.gridPixelSize);
                 ctx.fillRect(x * this.gridPixelSize, y * this.gridPixelSize + offsetTop, this.gridPixelSize, this.gridPixelSize);

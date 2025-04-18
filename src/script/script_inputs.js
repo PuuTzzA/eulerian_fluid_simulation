@@ -53,8 +53,8 @@ document.addEventListener("mousemove", (e) => {
     const offsetTop = window.innerHeight - fluid.gridSize * fluid.resolutionY;
     const y = (e.offsetY - offsetTop) / fluid.gridSize - 0.5;
 
-    fluid.mouseX = e.offsetX;
-    fluid.mouseY = e.offsetY;
+    fluid.mouseX = e.offsetX / fluid.gridPixelSize;
+    fluid.mouseY = e.offsetY / fluid.gridPixelSize;
 
     /*     console.log(x, y, "vel", Fluid.bilinearInterpolation(x, y, fluid.colorRed, fluid.resolutionX, fluid.resolutionY));
         if (Fluid.bilinearInterpolation(x, y, fluid.colorRed, fluid.resolutionX, fluid.resolutionY) !=
@@ -189,7 +189,7 @@ const fps = document.getElementById("fps");
 let newFps = 0;
 let accumulatedFps = [];
 let running = true;
-let delta = 0.01;
+let delta = 0.005;
 let previous;
 
 let resolutionX = 1;
@@ -197,7 +197,9 @@ let resolutionY = 1;
 let density = 0.1;
 
 let bodies = [];
-bodies.push(new SolidBox(0.5, 0.6, 0.5, 0.1, Math.PI * 0.25, 0.0, 0.0, .5));
+bodies.push(new SolidBox(0.5, 0.6, 0.5, 0.1, Math.PI * 0.25, 0, 0, 1));
+
+bodies.push(new SolidSphere(0.2, 0.2, 0.2, 0, 0, 0, 0));
 
 let fluid = new Fluid(1, 1, 0.1, bodies);
 
