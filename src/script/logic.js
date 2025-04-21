@@ -771,14 +771,13 @@ class FluidQuantity {
 }
 
 class Fluid {
-    constructor(w, h, density, densityAir, densitySoot, diffusion, bodies) {
+    constructor(w, h, densityAir, densitySoot, diffusion, bodies) {
         this.gs = new GraphicsSettings();
         this.mouseX = 0;
         this.mouseY = 0;
 
         this.w = w;
         this.h = h;
-        this.density = density;
         this.densityAir = densityAir;
         this.densitySoot = densitySoot;
         this.diffusion = diffusion;
@@ -834,6 +833,7 @@ class Fluid {
 
         // Incompressility 
         this.buildRhs(dt);
+        this.computeDensities();
         this.buildPressureMatrix(dt);
         this.buildPreconditioner();
         this.projectConjugateGradient(2000);
@@ -945,7 +945,7 @@ class Fluid {
      * Builds the pressure matrix (A)
      */
     buildPressureMatrix(dt) {
-        const scale = dt / (this.density * this.cellSize);
+        const scale = dt / (this.cellSize);
         const cell = this.d.cell;
 
         this.aDiag.fill(0);
@@ -958,13 +958,13 @@ class Fluid {
                     continue;
                 }
                 if (x < this.w - 1 && cell[idx + 1] == CELL_FLUID) {
-                    const factor = scale * this.u.volumeAt(x + 1, y);
+                    const factor = scale * this.u.volumeAt(x + 1, y) / this.uDensity[this.u.id(x + 1, y)];
                     this.aDiag[idx] += factor;
                     this.aDiag[idx + 1] += factor;
                     this.aPlusX[idx] = -factor;
                 }
                 if (y < this.h - 1 && cell[idx + this.w] == CELL_FLUID) {
-                    const factor = scale * this.v.volumeAt(x, y + 1);
+                    const factor = scale * this.v.volumeAt(x, y + 1) / this.vDensity[this.v.id(x, y + 1)];
                     this.aDiag[idx] += factor;
                     this.aDiag[idx + this.w] += factor;
                     this.aPlusY[idx] = -factor;
@@ -1185,18 +1185,18 @@ class Fluid {
     }
 
     applyPressure(dt) {
-        const scale = dt / (this.density * this.cellSize);
+        const scale = dt / this.cellSize;
         const cell = this.d.cell;
 
         for (let y = 0, idx = 0; y < this.h; y++) {
             for (let x = 0; x < this.w; x++, idx++) {
                 if (cell[idx] != CELL_FLUID) continue;
 
-                this.u.src[this.u.id(x, y)] -= scale * this.pressure[idx];
-                this.u.src[this.u.id(x + 1, y)] += scale * this.pressure[idx];
+                this.u.src[this.u.id(x, y)] -= scale * this.pressure[idx] / this.uDensity[this.u.id(x, y)];
+                this.u.src[this.u.id(x + 1, y)] += scale * this.pressure[idx] / this.uDensity[this.u.id(x + 1, y)];
 
-                this.v.src[this.v.id(x, y)] -= scale * this.pressure[idx];
-                this.v.src[this.v.id(x, y + 1)] += scale * this.pressure[idx];
+                this.v.src[this.v.id(x, y)] -= scale * this.pressure[idx] / this.vDensity[this.v.id(x, y)];
+                this.v.src[this.v.id(x, y + 1)] += scale * this.pressure[idx] / this.vDensity[this.v.id(x, y + 1)];
             }
         }
     }
