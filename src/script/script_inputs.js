@@ -149,7 +149,7 @@ function restart() {
     fluid.gravity = gravity;
 
     fluid.draw(); */
-    fluid = new Fluid(resolutionX, resolutionY, density, bodies);
+    fluid = new Fluid(resolutionX, resolutionY, density, densityAir, densitySoot, diffusion, bodies);
     //fluid.initGrid(10, 10);
     fluid.draw();
 }
@@ -160,17 +160,37 @@ function test() {
 
 function changeResolutionX(newVal) {
     resolutionX = parseInt(newVal);
-    fluid = new Fluid(resolutionX, resolutionY, density, bodies);
+    fluid = new Fluid(resolutionX, resolutionY, density, densityAir, densitySoot, diffusion, bodies);
 }
 
 function changeResolutionY(newVal) {
     resolutionY = parseInt(newVal);
-    fluid = new Fluid(resolutionX, resolutionY, density, bodies);
+    fluid = new Fluid(resolutionX, resolutionY, density, densityAir, densitySoot, diffusion, bodies);
 }
 
 function changeDensity(newVal) {
     density = parseFloat(newVal);
-    fluid = new Fluid(resolutionX, resolutionY, density, bodies);
+    fluid = new Fluid(resolutionX, resolutionY, density, densityAir, densitySoot, diffusion, bodies);
+}
+
+function changeDensityAir(newVal){
+    densityAir = newVal;
+    fluid.densityAir = densityAir;
+}
+
+function changeDensitySoot(newVal){
+    densitySoot = newVal;
+    fluid.densitySoot = densitySoot;
+}
+
+function changeGravityX(newVal){
+    gravityX = newVal;
+    fluid.gravityX = newVal;
+}
+
+function changeGravityY(newVal){
+    gravityY = newVal;
+    fluid.gravityY = newVal;
 }
 
 function drawVelocityChangeX(newVal) {
@@ -194,14 +214,20 @@ let previous;
 
 let resolutionX = 1;
 let resolutionY = 1;
-let density = 0.1;
+let density = 0;
+let densityAir = 0.1;
+let densitySoot = 0.1;
+let diffusion = 0.01;
 
 let bodies = [];
-bodies.push(new SolidBox(0.5, 0.6, 0.5, 0.1, Math.PI * 0.25, 0, 0, 1));
+/* bodies.push(new SolidBox(0.5, 0.6, 0.5, 0.1, Math.PI * 0.25, 0, 0, 1));
 
-bodies.push(new SolidSphere(0.2, 0.2, 0.2, 0, 0, 0, 0));
+bodies.push(new SolidSphere(0.2, 0.2, 0.2, 0, 0, 0, 0)); */
 
-let fluid = new Fluid(1, 1, 0.1, bodies);
+bodies.push(new SolidBox(0.3, 0.6, 0.1, 0.5, -Math.PI * 0.05, 0.0, 0.0, -1));
+
+
+let fluid = new Fluid(resolutionX, resolutionY, density, densityAir, densitySoot, diffusion, bodies);
 
 const FIX_DELTA = 0.005;
 
@@ -260,7 +286,10 @@ function step(now) {
     delta = FIX_DELTA;
 
     if (running) {
-        fluid.addInflow(0.45, 0.2, 0.15, 0.1, 1.0, 0.0, 3.0);
+        // fluid.addInflow(0.45, 0.2, 0.15, 0.1, 1.0, 0.0, 3.0);
+        fluid.addInflow(0.35, 0.9, 0.1, 0.05, 1.0, fluid.tAmb + 300.0, 0.0, 0.0);
+
+
         fluid.update(delta);
 
         fluid.draw(delta);

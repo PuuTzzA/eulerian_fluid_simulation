@@ -122,26 +122,32 @@ function length(x, y) {
     return Math.sqrt(x * x + y * y);
 }
 
-function scaledAdd(dst, a, b, s) {
+function scaledAdd(dst, a, b, s, cell) {
     // 'dst' = 'a' + s * 'b'
     for (let i = 0; i < dst.length; i++) {
-        dst[i] = a[i] + s * b[i];
+        if (cell[i] == CELL_FLUID) {
+            dst[i] = a[i] + s * b[i];
+        }
     }
 }
 
-function infinityNorm(a) {
+function infinityNorm(a, cell) {
     // returns the infinity norm of vector 'a'
     let max = 0;
     for (let i = 0; i < a.length; i++) {
-        max = Math.max(max, Math.abs(a[i]));
+        if (cell[i] == CELL_FLUID) {
+            max = Math.max(max, Math.abs(a[i]));
+        }
     }
     return max;
 }
 
-function dotProduct(a, b) {
+function dotProduct(a, b, cell) {
     let sum = 0;
     for (let i = 0; i < a.length; i++) {
-        sum += a[i] * b[i];
+        if (cell[i] == CELL_FLUID) {
+            sum += a[i] * b[i];
+        }
     }
     return sum;
 }
@@ -765,7 +771,7 @@ class FluidQuantity {
 }
 
 class Fluid {
-    constructor(w, h, density, bodies) {
+    constructor(w, h, density, densityAir, densitySoot, diffusion, bodies) {
         this.gs = new GraphicsSettings();
         this.mouseX = 0;
         this.mouseY = 0;
@@ -773,11 +779,21 @@ class Fluid {
         this.w = w;
         this.h = h;
         this.density = density;
+        this.densityAir = densityAir;
+        this.densitySoot = densitySoot;
+        this.diffusion = diffusion;
         this.cellSize = 1 / Math.min(w, h);
 
-        this.ink = new FluidQuantity(w, h, 0.5, 0.5, this.cellSize);
+        this.tAmb = 294; // ambient temperature in Kelvin
+        this.gravityX = 0;
+        this.gravityY = 9.81;
+
+        this.d = new FluidQuantity(w, h, 0.5, 0.5, this.cellSize);
+        this.t = new FluidQuantity(w, h, 0.5, 0.5, this.cellSize);
         this.u = new FluidQuantity(w + 1, h, 0.0, 0.5, this.cellSize);
         this.v = new FluidQuantity(w, h + 1, 0.5, 0.0, this.cellSize);
+
+        this.t.src.fill(this.tAmb);
 
         this.rhs = new Float64Array(w * h);
         this.pressure = new Float64Array(w * h);
@@ -789,6 +805,9 @@ class Fluid {
         this.aPlusY = new Float64Array(w * h);
         this.precon = new Float64Array(w * h);
 
+        this.uDensity = new Float64Array((w + 1) * h);
+        this.vDensity = new Float64Array(w * (h + 1));
+
         this.bodies = bodies;
 
         const shouldX = window.innerWidth / w;
@@ -797,47 +816,49 @@ class Fluid {
     }
 
     update(dt) {
-        this.ink.fillSolidFields(this.bodies);
+        this.d.fillSolidFields(this.bodies);
+        this.t.fillSolidFields(this.bodies);
         this.u.fillSolidFields(this.bodies);
         this.v.fillSolidFields(this.bodies);
 
+        // Temperature diffusion
+        this.rhs.set(this.t.src);
+        this.buildHeatDiffusionMatrix(dt);
+        this.buildPreconditioner();
+        this.projectConjugateGradient(2000);
+        this.t.src.set(this.pressure);
+        this.t.extrapolate();
 
-
-        /*         let x = this.mouseX * this.cellSize;
-                let y = this.mouseY * this.cellSize;
-        
-                let velx = this.bodies[0].velocityY(x, y);
-        
-                console.log(velx);
-        
-                return
-         */
-
+        this.addBuoyancy(dt);
         this.setBoundaryCondition();
 
+        // Incompressility 
         this.buildRhs(dt);
         this.buildPressureMatrix(dt);
         this.buildPreconditioner();
         this.projectConjugateGradient(2000);
         this.applyPressure(dt);
 
-        this.ink.extrapolate();
+        this.d.extrapolate();
         this.u.extrapolate();
         this.v.extrapolate();
 
         this.setBoundaryCondition();
 
-        this.ink.advect(dt, this.u, this.v, this.bodies);
+        this.d.advect(dt, this.u, this.v, this.bodies);
+        this.t.advect(dt, this.u, this.v, this.bodies);
         this.u.advect(dt, this.u, this.v, this.bodies);
         this.v.advect(dt, this.u, this.v, this.bodies);
 
-        this.ink.flip();
+        this.d.flip();
+        this.t.flip();
         this.u.flip();
         this.v.flip();
     }
 
-    addInflow(x, y, w, h, d, u, v) {
-        this.ink.addInflow(x, y, x + w, y + h, d);
+    addInflow(x, y, w, h, d, t, u, v) {
+        this.d.addInflow(x, y, x + w, y + h, d);
+        this.t.addInflow(x, y, x + w, y + h, t);
         this.u.addInflow(x, y, x + w, y + h, u);
         this.v.addInflow(x, y, x + w, y + h, v);
     }
@@ -865,8 +886,8 @@ class Fluid {
      * "Blend" between solid and fluid velocity based on the cell volume.
      */
     buildRhs() {
-        const cell = this.ink.cell;
-        const body = this.ink.body;
+        const cell = this.d.cell;
+        const body = this.d.body;
 
         for (let y = 0, idx = 0; y < this.h; y++) {
             for (let x = 0; x < this.w; x++, idx++) {
@@ -899,11 +920,33 @@ class Fluid {
     }
 
     /**
+     * Computes densities as a function of temperature and smoke concentration.
+     */
+    computeDensities() {
+        const alpha = (this.densitySoot - this.densityAir) / this.densityAir;
+
+        this.uDensity.fill(0);
+        this.vDensity.fill(0);
+
+        for (let y = 0; y < this.h; y++) {
+            for (let x = 0; x < this.w; x++) {
+                let density = this.densityAir * this.tAmb / this.t.at(x, y) * (1 + alpha * this.d.at(x, y));
+                density = Math.max(density, 0.05 * this.densityAir);
+
+                this.uDensity[this.u.id(x, y)] += 0.5 * density;
+                this.vDensity[this.v.id(x, y)] += 0.5 * density;
+                this.uDensity[this.u.id(x + 1, y)] += 0.5 * density;
+                this.vDensity[this.v.id(x, y + 1)] += 0.5 * density;
+            }
+        }
+    }
+
+    /**
      * Builds the pressure matrix (A)
      */
     buildPressureMatrix(dt) {
         const scale = dt / (this.density * this.cellSize);
-        const cell = this.ink.cell;
+        const cell = this.d.cell;
 
         this.aDiag.fill(0);
         this.aPlusX.fill(0);
@@ -930,10 +973,39 @@ class Fluid {
         }
     }
 
+    /**
+     * Builds the matrix used to compute heat diffusion.
+     */
+    buildHeatDiffusionMatrix(dt) {
+        this.aDiag.fill(1);
+        this.aPlusX.fill(0);
+        this.aPlusY.fill(0);
+
+        const cell = this.d.cell;
+        const scale = this.diffusion * dt / (this.cellSize * this.cellSize);
+
+        for (let y = 0, idx = 0; y < this.h; y++) {
+            for (let x = 0; x < this.w; x++, idx++) {
+                if (cell[idx] != CELL_FLUID) continue;
+
+                if (x < this.w - 1 && cell[idx + 1] == CELL_FLUID) {
+                    this.aDiag[idx] += scale;
+                    this.aDiag[idx + 1] += scale;
+                    this.aPlusX[idx] = -scale;
+                }
+                if (y < this.h - 1 && cell[idx + this.w] == CELL_FLUID) {
+                    this.aDiag[idx] += scale;
+                    this.aDiag[idx + this.w] += scale;
+                    this.aPlusY[idx] = -scale;
+                }
+            }
+        }
+    }
+
     buildPreconditioner() {
         const tau = 0.97;
         const sigma = 0.25;
-        const cell = this.ink.cell;
+        const cell = this.d.cell;
 
         for (let y = 0, idx = 0; y < this.h; y++) {
             for (let x = 0; x < this.w; x++, idx++) {
@@ -965,7 +1037,7 @@ class Fluid {
 
     applyPreconditioner(dst, a) {
         // applies preconditioner to vector 'a' and stores it in 'dst'
-        const cell = this.ink.cell;
+        const cell = this.d.cell;
 
         // first Lq = r  
         for (let y = 0, idx = 0; y < this.h; y++) {
@@ -1074,46 +1146,47 @@ class Fluid {
     }
 
     projectConjugateGradient(limit) {
+        const cell = this.d.cell;
+
         this.pressure.fill(0);
         this.applyPreconditioner(this.z, this.rhs);
         this.s.set(this.z);
 
-        let maxError = infinityNorm(this.rhs);
+        let maxError = infinityNorm(this.rhs, cell);
         if (maxError < 1e-5) {
-            console.log("Exiting solver, no pressure needed")
+            console.log("Exiting solver, no pressure needed");
             return;
         }
 
-        let sigma = dotProduct(this.z, this.rhs);
+        let sigma = dotProduct(this.z, this.rhs, cell);
 
         for (let iter = 0; iter < limit; iter++) {
             this.applyA(this.z, this.s);
-            let alpha = sigma / dotProduct(this.z, this.s);
+            let alpha = sigma / dotProduct(this.z, this.s, cell);
 
-            scaledAdd(this.pressure, this.pressure, this.s, alpha);
-            scaledAdd(this.rhs, this.rhs, this.z, -alpha);
+            scaledAdd(this.pressure, this.pressure, this.s, alpha, cell);
+            scaledAdd(this.rhs, this.rhs, this.z, -alpha, cell);
 
-            maxError = infinityNorm(this.rhs);
+            maxError = infinityNorm(this.rhs, cell);
             if (maxError < 1e-5) {
-                console.log(`Exiting solver after ${iter} iterations`)
+                console.log(`Exiting solver after ${iter} iterations. Maximum error is ${maxError}`);
                 return;
             }
 
             this.applyPreconditioner(this.z, this.rhs);
 
-            const sigmaNew = dotProduct(this.z, this.rhs);
-            scaledAdd(this.s, this.z, this.s, sigmaNew / sigma);
+            const sigmaNew = dotProduct(this.z, this.rhs, cell);
+            scaledAdd(this.s, this.z, this.s, sigmaNew / sigma, cell);
             sigma = sigmaNew;
         }
 
-        console.log("EXCEEDED MAXIMUM ITERATIONS");
-        /*         console.log(this.rhs);
-                console.log(this.aDiag); */
+        console.log(`EXCEEDED MAXIMUM ITERATIONS. Maximum error is ${maxError}`);
+        console.log("pres", this.pressure)
     }
 
     applyPressure(dt) {
         const scale = dt / (this.density * this.cellSize);
-        const cell = this.ink.cell;
+        const cell = this.d.cell;
 
         for (let y = 0, idx = 0; y < this.h; y++) {
             for (let x = 0; x < this.w; x++, idx++) {
@@ -1128,12 +1201,30 @@ class Fluid {
         }
     }
 
+    addBuoyancy(dt) {
+        const alpha = (this.densitySoot - this.densityAir) / this.densityAir;
+
+        for (let y = 0; y < this.h; y++) {
+            for (let x = 0; x < this.w; x++) {
+                // higher density (more soot) causes downward force,
+                // high temperatures cuase upward force
+                const buoyancy = dt * (alpha * this.d.at(x, y) - (this.t.at(x, y) - this.tAmb) / this.tAmb);
+
+                this.u.src[this.u.id(x, y)] += buoyancy * this.gravityX * 0.5;
+                this.u.src[this.u.id(x + 1, y)] += buoyancy * this.gravityX * 0.5;
+
+                this.v.src[this.v.id(x, y)] += buoyancy * this.gravityY * 0.5;
+                this.v.src[this.v.id(x, y + 1)] += buoyancy * this.gravityY * 0.5;
+            }
+        }
+    }
+
     /**
      * set all vel cells bordering solid cells to the solid velocity
      */
     setBoundaryCondition() {
-        const cell = this.ink.cell;
-        const body = this.ink.body;
+        const cell = this.d.cell;
+        const body = this.d.body;
 
         for (let y = 0, idx = 0; y < this.h; y++) {
             for (let x = 0; x < this.w; x++, idx++) {
@@ -1167,14 +1258,14 @@ class Fluid {
 
         const offsetTop = window.innerHeight - this.gridPixelSize * this.h;
 
-        for (let y = 0; y < this.ink.h; y++) {
-            for (let x = 0; x < this.ink.w; x++) {
+        for (let y = 0; y < this.d.h; y++) {
+            for (let x = 0; x < this.d.w; x++) {
 
                 ctx.strokeStyle = this.gs.getLineColour();
-                const d = Math.floor(this.ink.at(x, y) * 100);
+                const d = Math.floor(this.d.at(x, y) * 100);
 
-                const ink = this.ink.at(x, y) * 100;
-                const solids = (1 - this.ink.volumeAt(x, y)) * 200;
+                const ink = this.d.at(x, y) * 100;
+                const solids = (1 - this.d.volumeAt(x, y)) * 200;
 
                 ctx.fillStyle = this.gs.getCellColour(ink - solids, 0, solids);
 
@@ -1186,6 +1277,10 @@ class Fluid {
                     ctx.fillStyle = this.gs.getCellColour(0, 0, lkj);
                 } */
 
+                /*                 const temp = this.t.at(x, y) - this.tAmb;
+                                const r = temp9.81
+                
+                                ctx.fillStyle = this.gs.getCellColour(r, 0, 0); */
 
                 ctx.strokeRect(x * this.gridPixelSize, y * this.gridPixelSize + offsetTop, this.gridPixelSize, this.gridPixelSize);
                 ctx.fillRect(x * this.gridPixelSize, y * this.gridPixelSize + offsetTop, this.gridPixelSize, this.gridPixelSize);

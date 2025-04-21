@@ -34,11 +34,15 @@
         <div id="detailed-options" class="container-sliders">
             <my-slider title="Resolution X" min="10" max="256" step="1" startingValue="128" callbackFunction="changeResolutionX"></my-slider>
             <my-slider title="Resolution Y" min="10" max="256" step="1" startingValue="128" callbackFunction="changeResolutionY"></my-slider>
-            <my-slider title="Density" min="0" max="1" step="0.001" startingValue="0.1" callbackFunction="changeDensity"></my-slider>
-            <my-slider title="Velocity X" min="-10" max="10" step=".1" startingValue="3" callbackFunction="drawVelocityChangeX"></my-slider>
+            <my-slider title="Density" min="0" max="10" step="0.001" startingValue="0.1" callbackFunction="changeDensity"></my-slider>
+            <my-slider title="DensityAir" min="0" max="10" step="0.001" startingValue="0.1" callbackFunction="changeDensityAir"></my-slider>
+            <my-slider title="DensitySoot" min="0" max="10" step="0.001" startingValue="0.1" callbackFunction="changeDensitySoot"></my-slider>
+            <my-slider title="GravityX" min="-50" max="50" step="0.001" startingValue="0" callbackFunction="changeGravityX"></my-slider>
+            <my-slider title="GravityY" min="-50" max="50" step="0.001" startingValue="9.81" callbackFunction="changeGravityY"></my-slider>
+<!--             <my-slider title="Velocity X" min="-10" max="10" step=".1" startingValue="3" callbackFunction="drawVelocityChangeX"></my-slider>
             <my-slider title="Velocity Y" min="-10" max="10" step=".1" startingValue="3" callbackFunction="drawVelocityChangeY"></my-slider>
             <my-slider title="Red" min="0" max="255" step="1" startingValue="100" callbackFunction="drawRedChange"></my-slider>
-            <!--             <my-slider title="Stiffness" min="0" max="250" step="0.01" startingValue="50" callbackFunction="changeStiffness"></my-slider>
+ -->            <!--             <my-slider title="Stiffness" min="0" max="250" step="0.01" startingValue="50" callbackFunction="changeStiffness"></my-slider>
             <my-slider title="Near Stiffness" min="0" max="250" step="0.01" startingValue="50" callbackFunction="changeNearStiffness"></my-slider>
             <my-slider title="Linear Viscosity" min="0" max="150" step="0.01" startingValue="0" callbackFunction="changeLinearViscosity"></my-slider>
             <my-slider title="Quadratic Viscosity" min="0" max="0.05" step="0.001" startingValue="0.01" callbackFunction="changeQuadraticViscosity"></my-slider>
