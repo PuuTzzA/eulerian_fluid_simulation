@@ -231,6 +231,21 @@ function occupancy(d11, d12, d21, d22) {
     }
 }
 
+class Inflow {
+    constructor(x1, y1, x2, y2, d, t, u, v, act) {
+        this.x1 = x1;
+        this.x2 = x2;
+        this.y1 = y1;
+        this.y2 = y2;
+        this.d = d;
+        this.t = t;
+        this.u = u;
+        this.v = v;
+        this.active = act;
+    }
+}
+
+
 /**
  * abstract class for solid body
  */
@@ -812,6 +827,8 @@ class Fluid {
         const shouldX = window.innerWidth / w;
         const shouldY = window.innerHeight / h;
         this.gridPixelSize = Math.min(shouldX, shouldY);
+        this.inflows = [];
+        this.inflows.push(new Inflow(17, 36, 88, 119, 0, 0, 0, 0));
     }
 
     update(dt) {
@@ -1169,7 +1186,7 @@ class Fluid {
 
             maxError = infinityNorm(this.rhs, cell);
             if (maxError < 1e-5) {
-                console.log(`Exiting solver after ${iter} iterations. Maximum error is ${maxError}`);
+                //console.log(`Exiting solver after ${iter} iterations. Maximum error is ${maxError}`);
                 return;
             }
 
@@ -1181,7 +1198,6 @@ class Fluid {
         }
 
         console.log(`EXCEEDED MAXIMUM ITERATIONS. Maximum error is ${maxError}`);
-        console.log("pres", this.pressure)
     }
 
     applyPressure(dt) {
@@ -1249,6 +1265,20 @@ class Fluid {
         }
     }
 
+    /**
+     * returns the inflow at a specific coordinate, -1 if none 
+     */
+    getInflowAtPoint(x, y) {
+        for (let i = this.inflows.length - 1; i >= 0; i--) {
+            const inflow = this.inflows[i];
+            if (inflow.x1 <= x && x <= inflow.x2 && inflow.y1 <= y && y <= inflow.y2) {
+                inflow.active = true;
+                return inflow;
+            }
+        }
+        return -1;
+    }
+
     draw() {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         ctx.fillStyle = "black";
@@ -1277,10 +1307,10 @@ class Fluid {
                     ctx.fillStyle = this.gs.getCellColour(0, 0, lkj);
                 } */
 
-                /*                 const temp = this.t.at(x, y) - this.tAmb;
-                                const r = temp9.81
-                
-                                ctx.fillStyle = this.gs.getCellColour(r, 0, 0); */
+                /* const temp = this.t.at(x, y) - this.tAmb;
+                const r = temp; 
+
+                ctx.fillStyle = this.gs.getCellColour(r, 0, 0); */
 
                 ctx.strokeRect(x * this.gridPixelSize, y * this.gridPixelSize + offsetTop, this.gridPixelSize, this.gridPixelSize);
                 ctx.fillRect(x * this.gridPixelSize, y * this.gridPixelSize + offsetTop, this.gridPixelSize, this.gridPixelSize);
@@ -1289,6 +1319,16 @@ class Fluid {
                 // Fluid.hatchRect(x * this.gridSize, y * this.gridSize + offsetTop, this.gridSize, this.gridSize, this.gs.getHatchingSettings(this.labels[i], this.gridSize));
             }
         }
+
+        this.inflows.forEach(inflow => {
+            ctx.strokeStyle = inflow.active ? "red" : "yellow";
+            ctx.lineWidth = "10";
+
+            const dx = inflow.x2 - inflow.x1;
+            const dy = inflow.y2 - inflow.y1;
+
+            ctx.strokeRect(inflow.x1 * this.gridPixelSize, inflow.y1 * this.gridPixelSize + offsetTop, dx * this.gridPixelSize, dy * this.gridPixelSize)
+        })
 
         return;
 

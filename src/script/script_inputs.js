@@ -1,40 +1,7 @@
 // import { Fluid } from "./logic.js";
-
-let drawVelX = 0;
-let drawVelY = 0;
-let drawRed = 0;
-
-let mode = "red";
 const modeInidator = document.getElementById("mode");
 
-window.addEventListener("pointerdown", e => {
-    if (e.target.id != "canvas") { return };
-    const x = Math.floor(e.offsetX / fluid.gridSize);
-    const offsetTop = window.innerHeight - fluid.gridSize * fluid.resolutionY;
-    const y = Math.floor((e.offsetY - offsetTop) / fluid.gridSize);
-
-    switch (mode) {
-        case "velocity":
-            fluid.velocitiesX[y * (fluid.resolutionX + 1) + x] = drawVelX;
-            fluid.velocitiesX[y * (fluid.resolutionX + 1) + x + 1] = drawVelX;
-            fluid.velocitiesY[y * (fluid.resolutionX) + x] = drawVelY;
-            fluid.velocitiesY[(y + 1) * (fluid.resolutionX) + x] = drawVelY;
-            break;
-        case "velocityX":
-            fluid.velocitiesX[y * (fluid.resolutionX + 1) + x] = drawVelX;
-            fluid.velocitiesX[y * (fluid.resolutionX + 1) + x + 1] = drawVelX;
-            break;
-        case "velocityY":
-            fluid.velocitiesY[y * (fluid.resolutionX) + x] = drawVelY;
-            fluid.velocitiesY[(y + 1) * (fluid.resolutionX) + x] = drawVelY;
-            break;
-        case "red":
-            fluid.colorRed[y * fluid.resolutionX + x] = drawRed;
-            break;
-    }
-})
-
-addEventListener("keydown", (event) => {
+window.addEventListener("keydown", (event) => {
     if (event.key == "v") {
         mode = "velocity";
     } else if (event.key == "x") {
@@ -47,21 +14,72 @@ addEventListener("keydown", (event) => {
     modeInidator.innerHTML = mode;
 });
 
+const IDLE = 0;
+const DRAWING_INFLOW = 1;
+const EDITING_INFLOW = 2;
+
+let mode = IDLE;
+let x1, y1;
+let activeInflow = -1;
+
+function getXYfromEvent(e) {
+    const x = Math.floor(e.offsetX / fluid.gridPixelSize);
+    const offsetTop = window.innerHeight - fluid.gridPixelSize * fluid.h;
+    const y = Math.floor((e.offsetY - offsetTop) / fluid.gridPixelSize);
+    return [x, y];
+}
+
+window.addEventListener("pointerdown", e => {
+    if (e.target.id != "canvas") return;
+    [x1, y1] = getXYfromEvent(e);
+
+
+    if (activeInflow != -1) {
+        activeInflow.active = false;
+    }
+
+    activeInflow = fluid.getInflowAtPoint(x1, y1);
+    mode = activeInflow == -1 ? DRAWING_INFLOW : EDITING_INFLOW;
+
+    if (mode == DRAWING_INFLOW) {
+        activeInflow = new Inflow(x1, y1, x1, y1, 0, 0, 0, 0, true);
+        fluid.inflows.push(activeInflow);
+    };
+});
+
+window.addEventListener("pointerup", (e) => {
+    if (e.target.id != "canvas") return;
+    const [x2, y2] = getXYfromEvent(e);
+
+    if (mode == DRAWING_INFLOW) {
+        if (activeInflow.x1 == activeInflow.x2 || activeInflow.y1 == activeInflow.y2) {
+            const index = fluid.inflows.indexOf(activeInflow);
+            fluid.inflows.splice(index, 1);
+            console.log("deleted one inflow");
+        }
+        mode = EDITING_INFLOW;
+    } else if (mode == EDITING_INFLOW) {
+
+    }
+});
+
+
 document.addEventListener("mousemove", (e) => {
-    //if (e.target.id != "canvas") { return };
-    const x = e.offsetX / fluid.gridSize - 0.5;
-    const offsetTop = window.innerHeight - fluid.gridSize * fluid.resolutionY;
-    const y = (e.offsetY - offsetTop) / fluid.gridSize - 0.5;
+    if (e.target.id != "canvas") { return };
 
-    fluid.mouseX = e.offsetX / fluid.gridPixelSize;
-    fluid.mouseY = e.offsetY / fluid.gridPixelSize;
+    if (mode == DRAWING_INFLOW) {
+        let [x2, y2] = getXYfromEvent(e);
 
-    /*     console.log(x, y, "vel", Fluid.bilinearInterpolation(x, y, fluid.colorRed, fluid.resolutionX, fluid.resolutionY));
-        if (Fluid.bilinearInterpolation(x, y, fluid.colorRed, fluid.resolutionX, fluid.resolutionY) !=
-            Fluid.bilinearInterpolation2(x, y, fluid.colorRed, fluid.resolutionX, fluid.resolutionY)) {
-            console.log("bilinear interpolation error");
-        } */
-    //console.log(x, y, "vel", fluid.getVelocityAtPoint(x, y));
+        let _x1 = Math.min(x1, x2);
+        let _x2 = Math.max(x1, x2);
+        let _y1 = Math.min(y1, y2);
+        let _y2 = Math.max(y1, y2);
+
+        activeInflow.x1 = _x1;
+        activeInflow.y1 = _y1;
+        activeInflow.x2 = _x2;
+        activeInflow.y2 = _y2;
+    }
 })
 
 window.addEventListener("pointerup", e => {
@@ -201,7 +219,7 @@ function changeGravityY(newVal) {
 const fps = document.getElementById("fps");
 let newFps = 0;
 let accumulatedFps = [];
-let running = true;
+let running = false;
 let delta = 0.005;
 let previous;
 
@@ -213,11 +231,11 @@ let densitySoot = 0.1;
 let diffusion = 0.01;
 
 let bodies = [];
-/* bodies.push(new SolidBox(0.5, 0.6, 0.5, 0.1, Math.PI * 0.25, 0, 0, 1));
+bodies.push(new SolidBox(0.5, 0.6, 0.5, 0.1, Math.PI * 0.25, 0, 0, 5));
 
-bodies.push(new SolidSphere(0.2, 0.2, 0.2, 0, 0, 0, 0)); */
+bodies.push(new SolidSphere(0.2, 0.2, 0.2, 0, 0, 0, 0));
 
-bodies.push(new SolidBox(0.5, 0.6, 0.7, 0.1, Math.PI * 0.25, 0.0, 0.0, 0.0));
+// bodies.push(new SolidBox(0.5, 0.6, 0.7, 0.1, Math.PI * 0.25, 0.0, 0.0, 0.0));
 
 
 let fluid = new Fluid(resolutionX, resolutionY, densityAir, densitySoot, diffusion, bodies);
@@ -280,12 +298,11 @@ function step(now) {
 
     if (running) {
         // fluid.addInflow(0.45, 0.2, 0.15, 0.1, 1.0, 0.0, 3.0);
-        fluid.addInflow(0.45, 0.2, 0.1, 0.05, 1.0, fluid.tAmb, 0.0, 0.0);
+        fluid.addInflow(0.45, 0.2, 0.1, 0.05, 1.0, fluid.tAmb + 300, 0.0, 0.0);
 
 
         fluid.update(delta);
 
-        fluid.draw(delta);
 
         bodies.forEach(body => {
             body.update(delta);
@@ -297,6 +314,9 @@ function step(now) {
 
         frameCount++;
     }
+
+    fluid.draw(delta);
+
 
     requestAnimationFrame(step);
 }
