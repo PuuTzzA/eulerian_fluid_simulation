@@ -874,12 +874,7 @@ class Fluid {
 
     addInflows() {
         this.inflows.forEach(inflow => {
-            const x1 = inflow.x1 / this.w;
-            const y1 = inflow.y1 / this.h;
-            const x2 = inflow.x2 / this.w;
-            const y2 = inflow.y2 / this.h;
-
-            this.addInflow(x1, y1, x2, y2, inflow.d, inflow.t, inflow.u, inflow.v);
+            this.addInflow(inflow.x1, inflow.y1, inflow.x2, inflow.y2, inflow.d, inflow.t, inflow.u, inflow.v);
         })
     }
 
@@ -1281,6 +1276,7 @@ class Fluid {
     getInflowAtPoint(x, y) {
         for (let i = this.inflows.length - 1; i >= 0; i--) {
             const inflow = this.inflows[i];
+
             if (inflow.x1 <= x && x <= inflow.x2 && inflow.y1 <= y && y <= inflow.y2) {
                 inflow.active = true;
                 return inflow;
@@ -1330,14 +1326,21 @@ class Fluid {
             }
         }
 
+        const fac = Math.min(this.w, this.h);
+
         this.inflows.forEach(inflow => {
             ctx.strokeStyle = inflow.active ? "rgb(255, 174, 0)" : "rgba(100, 100, 100, 0.5)";
             ctx.lineWidth = inflow.active ? 4 : 2;
 
-            const dx = inflow.x2 - inflow.x1;
-            const dy = inflow.y2 - inflow.y1;
+            const x1 = inflow.x1 * fac;
+            const y1 = inflow.y1 * fac;
+            const x2 = inflow.x2 * fac;
+            const y2 = inflow.y2 * fac;
 
-            ctx.strokeRect(inflow.x1 * this.gridPixelSize, inflow.y1 * this.gridPixelSize + offsetTop, dx * this.gridPixelSize, dy * this.gridPixelSize)
+            const dx = x2 - x1;
+            const dy = y2 - y1;
+
+            ctx.strokeRect(x1 * this.gridPixelSize, y1 * this.gridPixelSize + offsetTop, dx * this.gridPixelSize, dy * this.gridPixelSize)
         })
 
         return;

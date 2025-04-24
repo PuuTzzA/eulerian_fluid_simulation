@@ -32,8 +32,9 @@ function getXYfromEvent(e) {
 
 function openInflowOptions(newInflow) {
     const offsetTop = window.innerHeight - fluid.gridPixelSize * fluid.h;
-    inflowOptionsContainer.style.top = (activeInflow.y1 * fluid.gridPixelSize + offsetTop) + "px";
-    inflowOptionsContainer.style.left = (activeInflow.x1 * fluid.gridPixelSize) + "px";
+    const fac = Math.min(fluid.w, fluid.h);
+    inflowOptionsContainer.style.top = (activeInflow.y1 * fac * fluid.gridPixelSize + offsetTop) + "px";
+    inflowOptionsContainer.style.left = (activeInflow.x1 * fac * fluid.gridPixelSize) + "px";
     inflowOptionsContainer.style.display = "block";
 
     if (newInflow) {
@@ -56,7 +57,9 @@ function closeInflowOptions() {
 window.addEventListener("pointerdown", e => {
     if (e.target.id != "canvas") return;
     [x1, y1] = getXYfromEvent(e);
-
+    const fac = Math.min(fluid.w, fluid.h);
+    x1 /= fac;
+    y1 /= fac;
 
     if (activeInflow != -1) {
         activeInflow.active = false;
@@ -76,6 +79,7 @@ window.addEventListener("pointerdown", e => {
 
 window.addEventListener("pointerup", (e) => {
     if (e.target.id != "canvas") return;
+    const fac = Math.min(fluid.w, fluid.h);
 
     if (mode == DRAWING_INFLOW) {
         if (activeInflow.x1 == activeInflow.x2 || activeInflow.y1 == activeInflow.y2) {
@@ -94,14 +98,15 @@ window.addEventListener("pointerup", (e) => {
 
 document.addEventListener("mousemove", (e) => {
     if (e.target.id != "canvas") { return };
+    const fac = Math.min(fluid.w, fluid.h);
 
     if (mode == DRAWING_INFLOW) {
         let [x2, y2] = getXYfromEvent(e);
 
-        let _x1 = Math.min(x1, x2);
-        let _x2 = Math.max(x1, x2);
-        let _y1 = Math.min(y1, y2);
-        let _y2 = Math.max(y1, y2);
+        let _x1 = Math.min(x1, x2 / fac);
+        let _x2 = Math.max(x1, x2 / fac);
+        let _y1 = Math.min(y1, y2 / fac);
+        let _y2 = Math.max(y1, y2 / fac);
 
         activeInflow.x1 = _x1;
         activeInflow.y1 = _y1;
@@ -279,7 +284,7 @@ bodies.push(new SolidBox(0.5, 0.6, 0.5, 0.1, Math.PI * 0.25, 0, 0, 5));
 bodies.push(new SolidSphere(0.2, 0.2, 0.2, 0, 0, 0, 0));
 
 let inflows = [];
-inflows.push(new Inflow(57, 26, 70, 32, 1.0, 294 + 300, 0.0, 0.0, false));
+inflows.push(new Inflow(.45, .2, .55, .25, 1.0, 294 + 300, 0.0, 0.0, false));
 
 // bodies.push(new SolidBox(0.5, 0.6, 0.7, 0.1, Math.PI * 0.25, 0.0, 0.0, 0.0));
 function newFluid() {
