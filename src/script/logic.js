@@ -786,7 +786,7 @@ class FluidQuantity {
 }
 
 class Fluid {
-    constructor(w, h, densityAir, densitySoot, diffusion, bodies) {
+    constructor(w, h, densityAir, densitySoot, diffusion, bodies, inflows) {
         this.gs = new GraphicsSettings();
         this.mouseX = 0;
         this.mouseY = 0;
@@ -827,8 +827,7 @@ class Fluid {
         const shouldX = window.innerWidth / w;
         const shouldY = window.innerHeight / h;
         this.gridPixelSize = Math.min(shouldX, shouldY);
-        this.inflows = [];
-        this.inflows.push(new Inflow(17, 36, 88, 119, 0, 0, 0, 0));
+        this.inflows = inflows;
     }
 
     update(dt) {
@@ -873,11 +872,22 @@ class Fluid {
         this.v.flip();
     }
 
-    addInflow(x, y, w, h, d, t, u, v) {
-        this.d.addInflow(x, y, x + w, y + h, d);
-        this.t.addInflow(x, y, x + w, y + h, t);
-        this.u.addInflow(x, y, x + w, y + h, u);
-        this.v.addInflow(x, y, x + w, y + h, v);
+    addInflows() {
+        this.inflows.forEach(inflow => {
+            const x1 = inflow.x1 / this.w;
+            const y1 = inflow.y1 / this.h;
+            const x2 = inflow.x2 / this.w;
+            const y2 = inflow.y2 / this.h;
+
+            this.addInflow(x1, y1, x2, y2, inflow.d, inflow.t, inflow.u, inflow.v);
+        })
+    }
+
+    addInflow(x1, y1, x2, y2, d, t, u, v) {
+        this.d.addInflow(x1, y1, x2, y2, d);
+        this.t.addInflow(x1, y1, x2, y2, t);
+        this.u.addInflow(x1, y1, x2, y2, u);
+        this.v.addInflow(x1, y1, x2, y2, v);
     }
 
     maxTimestep() {
@@ -1321,8 +1331,8 @@ class Fluid {
         }
 
         this.inflows.forEach(inflow => {
-            ctx.strokeStyle = inflow.active ? "red" : "yellow";
-            ctx.lineWidth = "10";
+            ctx.strokeStyle = inflow.active ? "rgb(255, 174, 0)" : "rgba(100, 100, 100, 0.5)";
+            ctx.lineWidth = inflow.active ? 4 : 2;
 
             const dx = inflow.x2 - inflow.x1;
             const dy = inflow.y2 - inflow.y1;

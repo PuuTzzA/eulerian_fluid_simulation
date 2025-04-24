@@ -49,9 +49,7 @@ class MySlider extends HTMLElement {
         });
 
         this.children[0].children[1].children[0].addEventListener("click", e => {
-            this.output.innerHTML = this.startingValue;
-            this.slider.value = this.startingValue;
-            window[this.callbackFunction](this.startingValue);
+            this.resetSlider();
         })
     }
 
@@ -60,6 +58,18 @@ class MySlider extends HTMLElement {
         this.output.innerHTML = newStartingValue;
         this.slider.value = newStartingValue;
         window[this.callbackFunction](this.startingValue);
+    }
+
+    resetSlider() {
+        this.output.innerHTML = this.startingValue;
+        this.slider.value = this.startingValue;
+        window[this.callbackFunction](this.startingValue);
+    }
+
+    setValue(newVal){
+        this.output.innerHTML = newVal;
+        this.slider.value = newVal;
+        window[this.callbackFunction](newVal);
     }
 }
 

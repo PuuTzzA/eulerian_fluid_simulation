@@ -21,12 +21,36 @@ const EDITING_INFLOW = 2;
 let mode = IDLE;
 let x1, y1;
 let activeInflow = -1;
+const inflowOptionsContainer = document.getElementById("inflow-options");
 
 function getXYfromEvent(e) {
     const x = Math.floor(e.offsetX / fluid.gridPixelSize);
     const offsetTop = window.innerHeight - fluid.gridPixelSize * fluid.h;
     const y = Math.floor((e.offsetY - offsetTop) / fluid.gridPixelSize);
     return [x, y];
+}
+
+function openInflowOptions(newInflow) {
+    const offsetTop = window.innerHeight - fluid.gridPixelSize * fluid.h;
+    inflowOptionsContainer.style.top = (activeInflow.y1 * fluid.gridPixelSize + offsetTop) + "px";
+    inflowOptionsContainer.style.left = (activeInflow.x1 * fluid.gridPixelSize) + "px";
+    inflowOptionsContainer.style.display = "block";
+
+    if (newInflow) {
+        inflowOptionsContainer.children[0].resetSlider();
+        inflowOptionsContainer.children[1].resetSlider();
+        inflowOptionsContainer.children[2].resetSlider();
+        inflowOptionsContainer.children[3].resetSlider();
+    } else {
+        inflowOptionsContainer.children[0].setValue(activeInflow.d);
+        inflowOptionsContainer.children[1].setValue(activeInflow.t);
+        inflowOptionsContainer.children[2].setValue(activeInflow.u);
+        inflowOptionsContainer.children[3].setValue(activeInflow.v);
+    }
+}
+
+function closeInflowOptions() {
+    inflowOptionsContainer.style.display = "none";
 }
 
 window.addEventListener("pointerdown", e => {
@@ -36,26 +60,30 @@ window.addEventListener("pointerdown", e => {
 
     if (activeInflow != -1) {
         activeInflow.active = false;
+        closeInflowOptions();
     }
 
     activeInflow = fluid.getInflowAtPoint(x1, y1);
     mode = activeInflow == -1 ? DRAWING_INFLOW : EDITING_INFLOW;
 
     if (mode == DRAWING_INFLOW) {
-        activeInflow = new Inflow(x1, y1, x1, y1, 0, 0, 0, 0, true);
+        activeInflow = new Inflow(x1, y1, x1, y1, 1, fluid.tAmb, 0, 0, true);
         fluid.inflows.push(activeInflow);
-    };
+    } else if (mode == EDITING_INFLOW) {
+        openInflowOptions(false);
+    }
 });
 
 window.addEventListener("pointerup", (e) => {
     if (e.target.id != "canvas") return;
-    const [x2, y2] = getXYfromEvent(e);
 
     if (mode == DRAWING_INFLOW) {
         if (activeInflow.x1 == activeInflow.x2 || activeInflow.y1 == activeInflow.y2) {
             const index = fluid.inflows.indexOf(activeInflow);
             fluid.inflows.splice(index, 1);
             console.log("deleted one inflow");
+        } else {
+            openInflowOptions(true);
         }
         mode = EDITING_INFLOW;
     } else if (mode == EDITING_INFLOW) {
@@ -81,6 +109,22 @@ document.addEventListener("mousemove", (e) => {
         activeInflow.y2 = _y2;
     }
 })
+
+function drawInflowD(newVal) {
+    activeInflow.d = parseFloat(newVal);
+}
+
+function drawInflowT(newVal) {
+    activeInflow.t = parseFloat(newVal);
+}
+
+function drawInflowU(newVal) {
+    activeInflow.u = parseFloat(newVal);
+}
+
+function drawInflowV(newVal) {
+    activeInflow.v = parseFloat(newVal);
+}
 
 window.addEventListener("pointerup", e => {
 })
@@ -167,7 +211,7 @@ function restart() {
     fluid.gravity = gravity;
 
     fluid.draw(); */
-    fluid = new Fluid(resolutionX, resolutionY, densityAir, densitySoot, diffusion, bodies);
+    newFluid();
     //fluid.initGrid(10, 10);
     fluid.draw();
 }
@@ -178,17 +222,17 @@ function test() {
 
 function changeResolutionX(newVal) {
     resolutionX = parseInt(newVal);
-    fluid = new Fluid(resolutionX, resolutionY, densityAir, densitySoot, diffusion, bodies);
+    newFluid();
 }
 
 function changeResolutionY(newVal) {
     resolutionY = parseInt(newVal);
-    fluid = new Fluid(resolutionX, resolutionY, densityAir, densitySoot, diffusion, bodies);
+    newFluid();
 }
 
 function changeDensity(newVal) {
     density = parseFloat(newVal);
-    fluid = new Fluid(resolutionX, resolutionY, densityAir, densitySoot, diffusion, bodies);
+    newFluid();
 }
 
 function changeDensityAir(newVal) {
@@ -219,7 +263,7 @@ function changeGravityY(newVal) {
 const fps = document.getElementById("fps");
 let newFps = 0;
 let accumulatedFps = [];
-let running = false;
+let running = true;
 let delta = 0.005;
 let previous;
 
@@ -232,13 +276,17 @@ let diffusion = 0.01;
 
 let bodies = [];
 bodies.push(new SolidBox(0.5, 0.6, 0.5, 0.1, Math.PI * 0.25, 0, 0, 5));
-
 bodies.push(new SolidSphere(0.2, 0.2, 0.2, 0, 0, 0, 0));
 
+let inflows = [];
+inflows.push(new Inflow(57, 26, 70, 32, 1.0, 294 + 300, 0.0, 0.0, false));
+
 // bodies.push(new SolidBox(0.5, 0.6, 0.7, 0.1, Math.PI * 0.25, 0.0, 0.0, 0.0));
-
-
-let fluid = new Fluid(resolutionX, resolutionY, densityAir, densitySoot, diffusion, bodies);
+function newFluid() {
+    fluid = new Fluid(resolutionX, resolutionY, densityAir, densitySoot, diffusion, bodies, inflows);
+}
+let fluid;
+newFluid();
 
 const FIX_DELTA = 0.005;
 
@@ -298,11 +346,9 @@ function step(now) {
 
     if (running) {
         // fluid.addInflow(0.45, 0.2, 0.15, 0.1, 1.0, 0.0, 3.0);
-        fluid.addInflow(0.45, 0.2, 0.1, 0.05, 1.0, fluid.tAmb + 300, 0.0, 0.0);
-
+        fluid.addInflows();
 
         fluid.update(delta);
-
 
         bodies.forEach(body => {
             body.update(delta);
