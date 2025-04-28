@@ -18,9 +18,9 @@ class GraphicsSettings {
         this.lineColour = "transparent";
         this.particleSize = 3;
         this.maxSpeed = 10;
-        this.maxVelocitySize = 1;
+        this.maxVelocitySize = 2;
         this.arrowWidth = 1;
-        this.arrowHeadSize = 9;
+        this.arrowHeadSize = 5;
         this.arrowColor = "red";
     }
 
@@ -446,7 +446,7 @@ class FluidQuantity {
         this.cellSize = cellSize;
 
         this.src = new Float64Array(w * h);
-        this.dst = new Float64Array(w * h);
+        this.old = new Float64Array(w * h);
 
         this.phi = new Float64Array((w + 1) * (h + 1)); // distance field, samples are offset by (-0.5, -0.5) and the grid is larger in each dimension, so that every src has 4 phi values 
         this.volume = new Float64Array(w * h); // fractional cell volume occupied by the fluid
@@ -462,10 +462,8 @@ class FluidQuantity {
         this.volume.fill(1);
     }
 
-    flip() {
-        const tmp = this.src;
-        this.src = this.dst;
-        this.dst = tmp;
+    copy() {
+        this.old.set(this.src);
     }
 
     at(x, y) {
@@ -478,6 +476,18 @@ class FluidQuantity {
 
     volumeAt(x, y) {
         return this.volume[y * this.w + x];
+    }
+
+    /**
+     * Adds contribution of sample at (x, y) to grid cell at (ix, iy) using a hat filter.
+     */
+    addSample(weight, value, x, y, ix, iy) {
+        if (ix < 0 || iy < 0 || ix >= this.w || iy >= this.h)
+            return;
+
+        const k = (1 - Math.abs(ix - x)) * (1 - Math.abs(iy - y));
+        weight[ix + iy * this.w] += k;
+        this.src[ix + iy * this.w] += k * value;
     }
 
     lerp(x, y, t) {
@@ -547,69 +557,20 @@ class FluidQuantity {
     }
 
     /**
-     * if (x, y) is inside a solid, project it back out to the closest surface point
+     * computes the change in quantity during the last update
      */
-    backProject(x, y, bodies) {
-        const rx = Math.min(Math.max(Math.floor(x - this.offsetX), 0), this.w - 1);
-        const ry = Math.min(Math.max(Math.floor(y - this.offsetY), 0), this.h - 1);
-
-        if (this.cell[ry * this.w + rx] != CELL_FLUID) {
-            x = (x - this.offsetX) * this.cellSize;
-            y = (y - this.offsetY) * this.cellSize;
-
-            [x, y] = bodies[this.body[ry * this.w + rx]].closestSurfacePoint(x, y);
-            x = x / this.cellSize + this.offsetX;
-            y = y / this.cellSize + this.offsetY;
+    diff(alpha) {
+        for (let i = 0; i < this.w * this.h; i++) {
+            this.src[i] -= (1 - alpha) * this.old[i];
         }
-        return [x, y];
     }
 
-    explicitEuler(x, y, dt, velocityX, velocityY) {
-        const uVel = velocityX.bilinearInterpolation(x, y) / this.cellSize;
-        const vVel = velocityY.bilinearInterpolation(x, y) / this.cellSize;
-
-        x -= uVel * dt;
-        y -= vVel * dt;
-
-        return [x, y];
-    }
-
-    rungeKutta4(x, y, dt, velocityX, velocityY) {
-        const uk1 = velocityX.bilinearInterpolation(x, y) / this.cellSize;
-        const vk1 = velocityY.bilinearInterpolation(x, y) / this.cellSize;
-        const xk1 = x - 0.5 * dt * uk1;
-        const yk1 = y - 0.5 * dt * vk1;
-
-        const uk2 = velocityX.bilinearInterpolation(xk1, yk1) / this.cellSize;
-        const vk2 = velocityY.bilinearInterpolation(xk1, yk1) / this.cellSize;
-        const xk2 = x - 0.5 * dt * uk2;
-        const yk2 = y - 0.5 * dt * vk2;
-
-        const uk3 = velocityX.bilinearInterpolation(xk2, yk2) / this.cellSize;
-        const vk3 = velocityY.bilinearInterpolation(xk2, yk2) / this.cellSize;
-        const xk3 = x - dt * uk3;
-        const yk3 = y - dt * vk3;
-
-        const uk4 = velocityX.bilinearInterpolation(xk3, yk3) / this.cellSize;
-        const vk4 = velocityY.bilinearInterpolation(xk3, yk3) / this.cellSize;
-
-        x -= dt / 6 * (uk1 + 2 * uk2 + 2 * uk3 + uk4);
-        y -= dt / 6 * (vk1 + 2 * vk2 + 2 * vk3 + vk4);
-
-        return [x, y];
-    }
-
-    advect(dt, u, v, bodies) {
-        for (let iy = 0, idx = 0; iy < this.h; iy++) {
-            for (let ix = 0; ix < this.w; ix++, idx++) {
-                let x = ix + this.offsetX;
-                let y = iy + this.offsetY;
-
-                [x, y] = this.rungeKutta4(x, y, dt, u, v);
-                [x, y] = this.backProject(x, y, bodies);
-
-                this.dst[idx] = this.bicubicInterpolation(x, y);
-            }
+    /**
+     * Reverses the previous transformations (saves memory)
+     */
+    undiff(alpha) {
+        for (let i = 0; i < this.w * this.h; i++) {
+            this.src[i] += (1 - alpha) * this.old[i];
         }
     }
 
@@ -695,23 +656,41 @@ class FluidQuantity {
     /**
      * If an entry is 0, it means both neighbours are available and the cell is ready for the PDE solve. 
      * If it is 1, the cell waits for neighbour in x direction, 2 for y direction and 3 for both.
+     * Cells with no particles in them are marked as EMPTY. Empty cells are computed as the average value
+     * of all available neighbours, and can therefore be computed as soon as at least one neightbouring cell
+     * is available.
      */
     fillSolidMask() {
+        // Make sure border is not touched by extrapolation
+        for (let x = 0; x < this.w; x++) {
+            this.mask[x] = this.mask[x + (this.h - 1) * this.w] = 0xff;
+        }
+        for (let y = 0; y < this.h; y++) {
+            this.mask[y * this.w] = this.mask[y * this.w + this.w - 1] = 0xff;
+        }
+
         for (let y = 1; y < this.h - 1; y++) {
             for (let x = 1; x < this.w - 1; x++) {
                 const idx = y * this.w + x;
 
-                if (this.cell[idx] == CELL_FLUID) continue;
-
-                let nx = this.normalX[idx];
-                let ny = this.normalY[idx];
-
                 this.mask[idx] = 0;
-                if (nx != 0 && this.cell[idx + signum(nx)] != CELL_FLUID) {
-                    this.mask[idx] |= 1; // neighbour in x direction is blocked
-                }
-                if (ny != 0 && this.cell[idx + this.w * signum(ny)] != CELL_FLUID) {
-                    this.mask[idx] |= 2; // neighbour in y direction is blocked
+                if (this.cell[idx] == CELL_SOLID) {
+                    const nx = this.normalX[idx];
+                    const ny = this.normalY[idx];
+
+                    if (nx != 0 && this.cell[idx + signum(nx)] != CELL_FLUID) {
+                        this.mask[idx] |= 1;
+                    }
+                    if (ny != 0 && this.cell[idx + signum(ny) * this.w] != CELL_FLUID) {
+                        this.mask[idx] |= 2;
+                    }
+                } else if (this.cell[idx] == CELL_EMPTY) {
+                    // Empty cells with no available neightbours need to be processed later
+                    this.mask[idx] =
+                        this.cell[idx - 1] != CELL_FLUID &&
+                        this.cell[idx + 1] != CELL_FLUID &&
+                        this.cell[idx - this.w] != CELL_FLUID &&
+                        this.cell[idx + this.w] != CELL_FLUID;
                 }
             }
         }
@@ -732,13 +711,106 @@ class FluidQuantity {
     }
 
     /**
+     * Computes the extrapolatiod value as the average of all available neighbouring cells.
+     */
+    extrapolateAverage(idx) {
+        let value = 0;
+        let count = 0;
+
+        if (this.cell[idx - 1] == CELL_FLUID) {
+            value += this.src[idx - 1];
+            count++;
+        }
+        if (this.cell[idx + 1] == CELL_FLUID) {
+            value += this.src[idx + 1];
+            count++;
+        }
+        if (this.cell[idx - this.w] == CELL_FLUID) {
+            value += this.src[idx - this.w];
+            count++;
+        }
+        if (this.cell[idx + this.w] == CELL_FLUID) {
+            value += this.src[idx + this.w];
+            count++;
+        }
+        return value / count;
+    }
+
+    /**
      * Given that a neighbour (specified by mask [1 = x, 2 = y]) has been solved, update the mask 
      * and if the cell can now be computed, add it to the queue of ready cells.
      */
-    freeNeighbour(idx, border, mask) {
-        this.mask[idx] &= ~mask; // remove the mask bit
-        if (this.cell[idx] != CELL_FLUID && this.mask[idx] == 0) {
-            border.push(idx);
+    freeSolidNeighbour(idx, border, mask) {
+        if (this.cell[idx] == CELL_SOLID) {
+            this.mask[idx] &= ~mask; // remove the mask bit
+            if (this.mask[idx] == 0) {
+                border.push(idx);
+            }
+        }
+    }
+
+    /**
+     * At least one free neighbour cell is enough to add this cell to the queue.
+     */
+    freeEmptyNeighbour(idx, border) {
+        if (this.cell[idx] == CELL_EMPTY) {
+            if (this.mask[idx] == 1) {
+                this.mask[idx] = 0;
+                border.push(idx);
+            }
+        }
+    }
+
+    /**
+     * For empty cell on the border of the simulation domain, copy values of adjacent cells.
+     */
+    extrapolateEmptyBorders() {
+        for (let x = 1; x < this.w - 1; x++) {
+            const idxT = x;
+            const idxB = x + (this.h - 1) * this.w;
+
+            if (this.cell[idxT] == CELL_EMPTY) {
+                this.src[idxT] = this.src[idxT + this.w];
+            }
+            if (this.cell[idxB] == CELL_EMPTY) {
+                this.src[idxB] = this.src[idxB - this.w];
+            }
+        }
+        for (let y = 1; y < this.h - 1; y++) {
+            const idxL = y * this.w;
+            const idxR = y * this.w + this.w - 1;
+
+            if (this.cell[idxL] == CELL_EMPTY) {
+                this.src[idxL] = this.src[idxL + 1];
+            }
+            if (this.cell[idxR] == CELL_EMPTY) {
+                this.src[idxR] = this.src[idxR - 1];
+            }
+        }
+
+        const idxTL = 0;
+        const idxTR = this.w - 1;
+        const idxBL = (this.h - 1) * this.w;
+        const idxBR = this.h * this.w - 1;
+
+        // corner cells average the values of the  two adjacent border cells
+        if (this.cell[idxTL] == CELL_EMPTY) {
+            this.src[idxTL] = 0.5 * (this.src[idxTL + 1] + this.src[idxTL + this.w]);
+        }
+        if (this.cell[idxTR] == CELL_EMPTY) {
+            this.src[idxTR] = 0.5 * (this.src[idxTR - 1] + this.src[idxTR + this.w]);
+        }
+        if (this.cell[idxBL] == CELL_EMPTY) {
+            this.src[idxBL] = 0.5 * (this.src[idxBL + 1] + this.src[idxBL - this.w]);
+        }
+        if (this.cell[idxBR] == CELL_EMPTY) {
+            this.src[idxBR] = 0.5 * (this.src[idxBR - 1] + this.src[idxBR - this.w]);
+        }
+
+        for (let i = 0; i < this.w * this.h; i++) {
+            if (this.cell[i] == CELL_EMPTY) {
+                this.cell[i] = CELL_FLUID;
+            }
         }
     }
 
@@ -765,22 +837,327 @@ class FluidQuantity {
         while (border.length != 0) {
             const idx = border.pop();
 
-            // solve for the value in cell
-            this.src[idx] = this.extrapolateNormal(idx);
+            if (this.cell[idx] == CELL_EMPTY) {
+                this.src[idx] = this.extrapolateAverage(idx);
+                this.cell[idx] = CELL_FLUID;
+            } else {
+                this.src[idx] = this.extrapolateNormal(idx);
+            }
 
             // Notify adjacent cells
             if (this.normalX[idx - 1] > 0) {
-                this.freeNeighbour(idx - 1, border, 1);
+                this.freeSolidNeighbour(idx - 1, border, 1);
             }
             if (this.normalX[idx + 1] < 0) {
-                this.freeNeighbour(idx + 1, border, 1);
+                this.freeSolidNeighbour(idx + 1, border, 1);
             }
             if (this.normalY[idx - this.w] > 0) {
-                this.freeNeighbour(idx - this.w, border, 2);
+                this.freeSolidNeighbour(idx - this.w, border, 2);
             }
             if (this.normalY[idx + this.w] < 0) {
-                this.freeNeighbour(idx + this.w, border, 2);
+                this.freeSolidNeighbour(idx + this.w, border, 2);
             }
+
+            this.freeEmptyNeighbour(idx - 1, border);
+            this.freeEmptyNeighbour(idx + 1, border);
+            this.freeEmptyNeighbour(idx - this.w, border);
+            this.freeEmptyNeighbour(idx + this.w, border);
+        }
+
+        this.extrapolateEmptyBorders();
+    }
+
+    /**
+     * Transfer particles onto grid using a linear filter.
+     * In the first step, particle values and filter weights are accumulated on the grid.
+     * In the second step, the actual grid values are obtained by dividing by the filter weights.
+     * Cells with weight 0, are marked as empty.
+     */
+    fromParticles(weight, count, posX, posY, property) {
+        this.src.fill(0);
+        weight.fill(0);
+
+        for (let i = 0; i < count; i++) {
+            let x = posX[i] - this.offsetX;
+            let y = posY[i] - this.offsetY;
+            x = Math.max(0.5, Math.min(this.w - 1.5, x));
+            y = Math.max(0.5, Math.min(this.h - 1.5, y));
+
+            const ix = Math.floor(x);
+            const iy = Math.floor(y);
+
+            this.addSample(weight, property[i], x, y, ix + 0, iy + 0);
+            this.addSample(weight, property[i], x, y, ix + 1, iy + 0);
+            this.addSample(weight, property[i], x, y, ix + 0, iy + 1);
+            this.addSample(weight, property[i], x, y, ix + 1, iy + 1);
+        }
+
+        for (let i = 0; i < this.w * this.h; i++) {
+            if (weight[i] != 0) {
+                this.src[i] /= weight[i];
+            } else if (this.cell[i] == CELL_FLUID) {
+                this.cell[i] = CELL_EMPTY;
+            }
+        }
+    }
+}
+
+class ParticleQuantities {
+    static MAX_PER_CELL = 12;
+    static MIN_PER_CELL = 3;
+    static AVG_PER_CELL = 4;
+
+    constructor(w, h, hx, bodies) {
+        this.particleCount; // currently alive
+        this.maxParticles = w * h * ParticleQuantities.MAX_PER_CELL; // maximum number that the simulation can handle
+
+        this.w = w;
+        this.h = h;
+        this.cellSize = hx;
+        this.bodies = bodies;
+
+        this.weight = new Float64Array((w + 1) * (h + 1)); // filter weights
+        this.counts = new Int16Array(w * h); // #particles per cell
+
+        this.posX = new Float64Array(this.maxParticles);
+        this.posY = new Float64Array(this.maxParticles);
+
+        this.properties = []; // particle properties, that is, value for each fluid quantity (vel, density, ...)
+        this.quantities = [];
+
+        this.initParticles();
+    }
+
+    /**
+     * returns true if a position is inside a solid body
+     */
+    pointInBody(x, y) {
+        for (let i = 0; i < this.bodies.length; i++) {
+            if (this.bodies[i].distance(x * this.cellSize, y * this.cellSize) < 0) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    initParticles() {
+        let idx = 0;
+        for (let y = 0; y < this.h; y++) {
+            for (let x = 0; x < this.w; x++) {
+                for (let i = 0; i < ParticleQuantities.AVG_PER_CELL; i++, idx++) {
+                    this.posX[idx] = x + Math.random();
+                    this.posY[idx] = y + Math.random();
+
+                    if (this.pointInBody(this.posX[idx], this.posY[idx])) {
+                        idx--;
+                    }
+                }
+            }
+        }
+        this.particleCount = idx;
+    }
+
+    /**
+     * counts particles per cell
+     */
+    countParticles() {
+        this.counts.fill(0);
+        for (let i = 0; i < this.particleCount; i++) {
+            const ix = Math.floor(this.posX[i]);
+            const iy = Math.floor(this.posY[i]);
+
+            if (ix >= 0 && iy >= 0 && ix < this.w && iy < this.h) {
+                this.counts[ix + iy * this.w]++;
+            }
+        }
+    }
+
+    /**
+     * Decimates particles in crowded cells
+     */
+    pruneParticles() {
+        for (let i = 0; i < this.particleCount; i++) {
+            const ix = Math.floor(this.posX[i]);
+            const iy = Math.floor(this.posY[i]);
+            const idx = ix + iy * this.w;
+
+            if (ix < 0 || iy < 0 || ix >= this.w || iy >= this.h) {
+                continue;
+            }
+            if (this.counts[idx] > ParticleQuantities.MAX_PER_CELL) {
+                const j = --this.particleCount;
+
+                this.posX[i] = this.posX[j];
+                this.posY[i] = this.posY[j];
+
+                for (let t = 0; t < this.quantities.length; t++) {
+                    this.properties[t][i] = this.properties[t][j];
+                }
+
+                this.counts[idx]--;
+                i--;
+            }
+        }
+    }
+
+    /**
+     * Adds new particles in cells with dangerously little particles
+     */
+    seedParticles() {
+        for (let y = 0, idx = 0; y < this.h; y++) {
+            for (let x = 0; x < this.w; x++, idx++) {
+                for (let i = 0; i < ParticleQuantities.MIN_PER_CELL - this.counts[idx]; i++) {
+                    if (this.particleCount == this.maxParticles)
+                        return;
+
+                    let j = this.particleCount;
+                    this.posX[j] = x + Math.random();
+                    this.posY[j] = y + Math.random();
+
+                    // reject particles inside solids
+                    if (this.pointInBody(this.posX[j], this.posY[j])) {
+                        continue;
+                    }
+
+                    for (let t = 0; t < this.quantities.length; t++) {
+                        this.properties[t][j] = this.quantities[t].bilinearInterpolation(this.posX[j], this.posY[j]);
+                    }
+
+                    this.particleCount++;
+                }
+            }
+        }
+    }
+
+    /**
+     * Pushes particle back into the fluid if they land inside solid bodies
+     */
+    backProject(x, y) {
+        let d = 1e30;
+        let closestBody = -1;
+
+        for (let i = 0; i < this.bodies.length; i++) {
+            let id = this.bodies[i].distance(x * this.cellSize, y * this.cellSize);
+
+            if (id < d) {
+                d = id;
+                closestBody = i;
+            }
+        }
+
+        if (d < 0) {
+            x *= this.cellSize;
+            y *= this.cellSize;
+            [x, y] = this.bodies[closestBody].closestSurfacePoint(x, y);
+            x /= this.cellSize;
+            y /= this.cellSize;
+        }
+
+        return [x, y];
+    }
+
+    /**
+     * RK4, forward in time
+     */
+    rungeKutta4(x, y, dt, velocityX, velocityY) {
+        const uk1 = velocityX.bilinearInterpolation(x, y) / this.cellSize;
+        const vk1 = velocityY.bilinearInterpolation(x, y) / this.cellSize;
+        const xk1 = x + 0.5 * dt * uk1;
+        const yk1 = y + 0.5 * dt * vk1;
+
+        const uk2 = velocityX.bilinearInterpolation(xk1, yk1) / this.cellSize;
+        const vk2 = velocityY.bilinearInterpolation(xk1, yk1) / this.cellSize;
+        const xk2 = x + 0.5 * dt * uk2;
+        const yk2 = y + 0.5 * dt * vk2;
+
+        const uk3 = velocityX.bilinearInterpolation(xk2, yk2) / this.cellSize;
+        const vk3 = velocityY.bilinearInterpolation(xk2, yk2) / this.cellSize;
+        const xk3 = x + dt * uk3;
+        const yk3 = y + dt * vk3;
+
+        const uk4 = velocityX.bilinearInterpolation(xk3, yk3) / this.cellSize;
+        const vk4 = velocityY.bilinearInterpolation(xk3, yk3) / this.cellSize;
+
+        x += dt / 6 * (uk1 + 2 * uk2 + 2 * uk3 + uk4);
+        y += dt / 6 * (vk1 + 2 * vk2 + 2 * vk3 + vk4);
+
+        return [x, y];
+    }
+
+    /**
+     * RK3
+     */
+    rungeKutta3(x, y, dt, velocityX, velocityY) {
+        let firstU = velocityX.bilinearInterpolation(x, y) / this.cellSize;
+        let firstV = velocityY.bilinearInterpolation(x, y) / this.cellSize;
+
+        let midX = x + 0.5 * dt * firstU;
+        let midY = y + 0.5 * dt * firstV;
+
+        let midU = velocityX.bilinearInterpolation(midX, midY) / this.cellSize;
+        let midV = velocityY.bilinearInterpolation(midX, midY) / this.cellSize;
+
+        let lastX = x + 0.75 * dt * midU;
+        let lastY = y + 0.75 * dt * midV;
+
+        let lastU = velocityX.bilinearInterpolation(lastX, lastY) / this.cellSize;
+        let lastV = velocityY.bilinearInterpolation(lastX, lastY) / this.cellSize;
+
+        x += dt * ((2 / 9) * firstU + (3 / 9) * midU + (4 / 9) * lastU);
+        y += dt * ((2 / 9) * firstV + (3 / 9) * midV + (4 / 9) * lastV);
+
+        return [x, y];
+    }
+
+    /**
+     * Adds a new quantity to be carried y the particles
+     */
+    addQuantity(q) {
+        let property = new Float64Array(this.maxParticles);
+        this.quantities.push(q);
+        this.properties.push(property);
+    }
+
+    /**
+     * Interpolates the change in quantity back onto the particles.
+     * Mixes in a bit of the pure PIC update.
+     */
+    gridToParticles(alpha) {
+        for (let t = 0; t < this.quantities.length; t++) {
+            for (let i = 0; i < this.particleCount; i++) {
+                this.properties[t][i] *= 1 - alpha;
+                this.properties[t][i] += this.quantities[t].bilinearInterpolation(this.posX[i], this.posY[i]);
+            }
+        }
+    }
+
+    /**
+     * Interpolates particle quantitites onto the grid
+     */
+    particlesToGrid() {
+        for (let t = 0; t < this.quantities.length; t++) {
+            this.quantities[t].fromParticles(this.weight, this.particleCount, this.posX, this.posY, this.properties[t]);
+            this.quantities[t].extrapolate();
+        }
+
+        this.countParticles();
+        this.pruneParticles();
+        this.seedParticles();
+
+        console.log(`Particle count: ${this.particleCount}`);
+    }
+
+    /**
+     * Advects particles in velocity field and clamps positions.
+     */
+    advect(dt, u, v) {
+        for (let i = 0; i < this.particleCount; i++) {
+            let x, y;
+            [x, y] = this.rungeKutta4(this.posX[i], this.posY[i], dt, u, v);
+            [x, y] = this.backProject(x, y);
+
+            this.posX[i] = Math.max(Math.min(x, this.w - 0.001), 0);
+            this.posY[i] = Math.max(Math.min(y, this.h - 0.001), 0);
         }
     }
 }
@@ -801,13 +1178,20 @@ class Fluid {
         this.tAmb = 294; // ambient temperature in Kelvin
         this.gravityX = 0;
         this.gravityY = 9.81;
+        this.flipAlpha = 0.001; // blending constant for FLIP/PIC to avoid noise
 
         this.d = new FluidQuantity(w, h, 0.5, 0.5, this.cellSize);
         this.t = new FluidQuantity(w, h, 0.5, 0.5, this.cellSize);
         this.u = new FluidQuantity(w + 1, h, 0.0, 0.5, this.cellSize);
         this.v = new FluidQuantity(w, h + 1, 0.5, 0.0, this.cellSize);
+        this.qs = new ParticleQuantities(w, h, this.cellSize, bodies);
 
         this.t.src.fill(this.tAmb);
+        this.qs.addQuantity(this.d);
+        this.qs.addQuantity(this.t);
+        this.qs.addQuantity(this.u);
+        this.qs.addQuantity(this.v);
+        this.qs.gridToParticles(1);
 
         this.rhs = new Float64Array(w * h);
         this.pressure = new Float64Array(w * h);
@@ -836,6 +1220,18 @@ class Fluid {
         this.u.fillSolidFields(this.bodies);
         this.v.fillSolidFields(this.bodies);
 
+        // Interpolate particle quantities to grid
+        this.qs.particlesToGrid();
+
+        // Set current values as the old/pre-update values
+        this.d.copy();
+        this.t.copy();
+        this.u.copy();
+        this.v.copy();
+
+        // Add inflows
+        this.addInflows();
+
         // Temperature diffusion
         this.rhs.set(this.t.src);
         this.buildHeatDiffusionMatrix(dt);
@@ -861,15 +1257,23 @@ class Fluid {
 
         this.setBoundaryCondition();
 
-        this.d.advect(dt, this.u, this.v, this.bodies);
-        this.t.advect(dt, this.u, this.v, this.bodies);
-        this.u.advect(dt, this.u, this.v, this.bodies);
-        this.v.advect(dt, this.u, this.v, this.bodies);
+        // Compute change in quantities
+        this.d.diff(this.flipAlpha);
+        this.t.diff(this.flipAlpha);
+        this.u.diff(this.flipAlpha);
+        this.v.diff(this.flipAlpha);
 
-        this.d.flip();
-        this.t.flip();
-        this.u.flip();
-        this.v.flip();
+        // Interpolate change onto particles
+        this.qs.gridToParticles(this.flipAlpha);
+
+        // Reverse the change computation ot get post-update values back
+        this.d.undiff(this.flipAlpha);
+        this.t.undiff(this.flipAlpha);
+        this.u.undiff(this.flipAlpha);
+        this.v.undiff(this.flipAlpha);
+
+        // Advect particles in velocity field
+        this.qs.advect(dt, this.u, this.v);
     }
 
     addInflows() {
@@ -1121,52 +1525,6 @@ class Fluid {
         }
     }
 
-    projectGaussSeidel(limit, dt) {
-        // gauss seidel iteration
-        const scale = dt / (this.density * this.cellSize * this.cellSize);
-
-        let maxDelta;
-
-        for (let iter = 0; iter < limit; iter++) {
-            maxDelta = 0;
-
-            for (let y = 0, idx = 0; y < this.h; y++) {
-                for (let x = 0; x < this.w; x++, idx++) {
-                    let diag = 0;
-                    let offDiag = 0;
-
-                    if (x > 0) {
-                        diag += scale;
-                        offDiag += scale * this.pressure[idx - 1];
-                    }
-                    if (y > 0) {
-                        diag += scale;
-                        offDiag += scale * this.pressure[idx - this.w];
-                    }
-                    if (x < this.w - 1) {
-                        diag += scale;
-                        offDiag += scale * this.pressure[idx + 1];
-                    }
-                    if (y < this.h - 1) {
-                        diag += scale;
-                        offDiag += scale * this.pressure[idx + this.w];
-                    }
-
-                    const newPressure = (this.rhs[idx] + offDiag) / diag;
-                    maxDelta = Math.max(maxDelta, Math.abs(newPressure - this.pressure[idx]));
-                    this.pressure[idx] = newPressure;
-                }
-            }
-
-            if (maxDelta < 1e-5) {
-                console.log(`Exiting solver after ${iter} iterations`)
-                return;
-            }
-        }
-
-        console.log("EXCEEDED MAXIMUM ITERATIONS");
-    }
-
     projectConjugateGradient(limit) {
         const cell = this.d.cell;
 
@@ -1327,6 +1685,17 @@ class Fluid {
         }
 
         const fac = Math.min(this.w, this.h);
+
+        for (let i = 0; i < this.qs.particleCount; i++) {
+            ctx.fillStyle = "rgba(0, 255, 0, .5)";
+
+            let x = this.qs.posX[i];
+            let y = this.qs.posY[i];
+
+            ctx.beginPath();
+            ctx.arc(x * this.gridPixelSize, y * this.gridPixelSize, 1, 0, 2 * Math.PI);
+            ctx.fill();
+        }
 
         this.inflows.forEach(inflow => {
             ctx.strokeStyle = inflow.active ? "rgb(255, 174, 0)" : "rgba(100, 100, 100, 0.5)";

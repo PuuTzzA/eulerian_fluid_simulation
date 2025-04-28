@@ -269,7 +269,7 @@ const fps = document.getElementById("fps");
 let newFps = 0;
 let accumulatedFps = [];
 let running = true;
-let delta = 0.005;
+let delta = 0.0025;
 let previous;
 
 let resolutionX = 1;
@@ -293,7 +293,7 @@ function newFluid() {
 let fluid;
 newFluid();
 
-const FIX_DELTA = 0.005;
+const FIX_DELTA = 0.0025;
 
 /* fluid.setResolutionX(5);
 fluid.setResolutionY(5);
@@ -350,9 +350,6 @@ function step(now) {
     delta = FIX_DELTA;
 
     if (running) {
-        // fluid.addInflow(0.45, 0.2, 0.15, 0.1, 1.0, 0.0, 3.0);
-        fluid.addInflows();
-
         fluid.update(delta);
 
         bodies.forEach(body => {
