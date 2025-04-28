@@ -1144,7 +1144,7 @@ class ParticleQuantities {
         this.pruneParticles();
         this.seedParticles();
 
-        console.log(`Particle count: ${this.particleCount}`);
+        //console.log(`Particle count: ${this.particleCount}`);
     }
 
     /**
@@ -1289,7 +1289,7 @@ class Fluid {
         this.v.addInflow(x1, y1, x2, y2, v);
     }
 
-    maxTimestep() {
+    maxVel() {
         let maxVel = 0;
         for (let y = 0; y < this.h; y++) {
             for (let x = 0; x < this.w; x++) {
@@ -1304,6 +1304,7 @@ class Fluid {
 
         // Fluid should not move more than two grid cells per iteration
         const maxTimestep = 0.5 * this.cellSize / maxVel;
+        return maxVel;
         return Math.min(maxTimestep, 1);
     }
 
@@ -1600,21 +1601,80 @@ class Fluid {
 
     /**
      * set all vel cells bordering solid cells to the solid velocity
+     * Slip
      */
     setBoundaryCondition() {
         const cell = this.d.cell;
         const body = this.d.body;
+        const volume = this.d.volume;
 
         for (let y = 0, idx = 0; y < this.h; y++) {
             for (let x = 0; x < this.w; x++, idx++) {
                 if (cell[idx] == CELL_SOLID) {
+                    const b = this.bodies[body[idx]];
+                    const vol = volume[idx];
+                    const nx = this.d.normalX[idx];
+                    const ny = this.d.normalY[idx];
+
+                    // near boundry 
+                    if (vol < 1) {
+                        const solidVelX = b.velocityX(x * this.cellSize, y * this.cellSize);
+                        const solidVelY = b.velocityY(x * this.cellSize, y * this.cellSize);
+
+                        const fluidVelX = this.u.at(x, y);
+                        const fluidVelY = this.v.at(x, y);
+
+                        const relVelX = fluidVelX - solidVelX;
+                        const relVelY = fluidVelY - solidVelY;
+
+                        const relNormal = relVelX * nx + relVelY * ny;
+
+                        const correctedRelVelX = relVelX - relNormal * nx;
+                        const correctedRelVelY = relVelY - relNormal * ny;
+
+                        this.u.src[this.u.id(x, y)] = solidVelX + correctedRelVelX;
+                        this.v.src[this.v.id(x, y)] = solidVelY + correctedRelVelY;
+                    } else {
+                        this.u.src[this.u.id(x, y)] = b.velocityX(x * this.cellSize, y * this.cellSize);
+                        this.v.src[this.v.id(x, y)] = b.velocityY(x * this.cellSize, y + this.cellSize);
+                    }
+                }
+            }
+        }
+
+        for (let y = 0; y < this.h; y++) {
+            this.u.src[y * (this.w + 1)] = 0;
+            this.u.src[y * (this.w + 1) + this.w] = 0;
+        }
+        for (let x = 0; x < this.w; x++) {
+            this.v.src[x] = 0;
+            this.v.src[this.h * this.w + x] = 0;
+        }
+    }
+
+    /**
+     * boundry condition, no-slip
+     */
+    setBoundaryCondition2() {
+        const cell = this.d.cell;
+        const body = this.d.body;
+        const volume = this.d.volume;
+
+        for (let y = 0, idx = 0; y < this.h; y++) {
+            for (let x = 0; x < this.w; x++, idx++) {
+                if (cell[idx] == CELL_SOLID || volume[idx] < 1) {
                     const b = this.bodies[body[idx]];
 
                     this.u.src[this.u.id(x, y)] = b.velocityX(x * this.cellSize, (y + 0.5) * this.cellSize);
                     this.v.src[this.v.id(x, y)] = b.velocityY((x + 0.5) * this.cellSize, y * this.cellSize);
                     this.u.src[this.u.id(x + 1, y)] = b.velocityX((x + 1) * this.cellSize, (y + 0.5) * this.cellSize);
                     this.v.src[this.v.id(x, y + 1)] = b.velocityY((x + 0.5) * this.cellSize, (y + 1) * this.cellSize);
-                }
+
+/*                     this.u.src[this.u.id(x, y)] = b.velocityX(x * this.cellSize, (y + 0.5) * this.cellSize) * signum(this.u.normalX[idx]);
+                    this.v.src[this.v.id(x, y)] = b.velocityY((x + 0.5) * this.cellSize, y * this.cellSize) * signum(this.v.normalY[idx]);
+                    this.u.src[this.u.id(x + 1, y)] = b.velocityX((x + 1) * this.cellSize, (y + 0.5) * this.cellSize) * signum(this.u.normalX[idx]);
+                    this.v.src[this.v.id(x, y + 1)] = b.velocityY((x + 0.5) * this.cellSize, (y + 1) * this.cellSize) * signum(this.v.normalY[idx]);
+ */                }
             }
         }
 

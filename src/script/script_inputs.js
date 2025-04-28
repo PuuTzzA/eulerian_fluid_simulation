@@ -1,17 +1,6 @@
 // import { Fluid } from "./logic.js";
-const modeInidator = document.getElementById("mode");
-
 window.addEventListener("keydown", (event) => {
-    if (event.key == "v") {
-        mode = "velocity";
-    } else if (event.key == "x") {
-        mode = "velocityX";
-    } else if (event.key == "y") {
-        mode = "velocityY";
-    } else if (event.key == "r") {
-        mode = "red";
-    }
-    modeInidator.innerHTML = mode;
+
 });
 
 const IDLE = 0;
@@ -280,11 +269,11 @@ let densitySoot = 0.1;
 let diffusion = 0.01;
 
 let bodies = [];
-bodies.push(new SolidBox(0.5, 0.6, 0.5, 0.1, Math.PI * 0.25, 0, 0, 5));
+bodies.push(new SolidBox(0.5, 0.6, 0.5, 0.1, Math.PI * 0.25, 0, 0, 0));
 bodies.push(new SolidSphere(0.2, 0.2, 0.2, 0, 0, 0, 0));
 
 let inflows = [];
-inflows.push(new Inflow(.45, .2, .55, .25, 1.0, 294 + 300, 0.0, 0.0, false));
+inflows.push(new Inflow(.45, .2, .55, .25, 2.0, 294 + 300, 0.0, 0.0, false));
 
 // bodies.push(new SolidBox(0.5, 0.6, 0.7, 0.1, Math.PI * 0.25, 0.0, 0.0, 0.0));
 function newFluid() {
@@ -293,7 +282,32 @@ function newFluid() {
 let fluid;
 newFluid();
 
-const FIX_DELTA = 0.0025;
+
+const DEFAULT_DT = 0.0025;
+const DEFAULT_CFL = 0.5;
+const modeInidator = document.getElementById("mode");
+
+function changeDtToCfl() {
+    setDt = !setDt;
+
+    if (setDt) {
+        document.getElementById("detailed-options").children[8].changeTitle("Timestep");
+        document.getElementById("detailed-options").children[8].changeBounds(0.0001, 0.2);
+        document.getElementById("detailed-options").children[8].changeStartingValue(DEFAULT_DT);
+    } else {
+        document.getElementById("detailed-options").children[8].changeTitle("CFL number");
+        document.getElementById("detailed-options").children[8].changeBounds(0.001, 20);
+        document.getElementById("detailed-options").children[8].changeStartingValue(DEFAULT_CFL);
+    }
+}
+
+let dtOrCFL = 0.0025;
+let specifiedDt = 0.0025;
+
+function changeDTofCFL(newVal) {
+    dtOrCFL = newVal;
+}
+
 
 /* fluid.setResolutionX(5);
 fluid.setResolutionY(5);
@@ -347,14 +361,22 @@ function step(now) {
         } */
 
     //running = false;
-    delta = FIX_DELTA;
-
     if (running) {
-        fluid.update(delta);
+        fluid.update(specifiedDt);
 
         bodies.forEach(body => {
-            body.update(delta);
+            body.update(specifiedDt);
         })
+
+        if (setDt) {
+            const cflNumber = (dtOrCFL * fluid.maxVel()) / fluid.cellSize;
+            modeInidator.innerHTML = "CFL number: " + cflNumber;
+            specifiedDt = dtOrCFL;
+        } else {
+            const dt = dtOrCFL * fluid.cellSize / fluid.maxVel();
+            modeInidator.innerHTML = "Timestep: " + dt;
+            specifiedDt = dt;
+        }
 
         /*         if (frameCount % 100 === 0) {
                     saveCanvasAsPng(`frames/gs${String(frameCount).padStart(6, '0')}.png`);

@@ -39,6 +39,7 @@ class MySlider extends HTMLElement {
         sliders.push(this)
 
         this.callbackFunction = this.getAttribute("callbackFunction");
+        this.titleSpan = this.children[0].children[0].children[0];
         this.output = this.children[0].children[0].children[1];
         this.slider = this.children[0].children[1].children[1];
         window[this.callbackFunction](this.startingValue);
@@ -66,10 +67,19 @@ class MySlider extends HTMLElement {
         window[this.callbackFunction](this.startingValue);
     }
 
-    setValue(newVal){
+    setValue(newVal) {
         this.output.innerHTML = newVal;
         this.slider.value = newVal;
         window[this.callbackFunction](newVal);
+    }
+
+    changeTitle(newTitle) {
+        this.titleSpan.innerHTML = newTitle;
+    }
+
+    changeBounds(newMin, newMax) {
+        this.slider.min = newMin;
+        this.slider.max = newMax;
     }
 }
 

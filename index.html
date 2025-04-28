@@ -39,9 +39,12 @@
             <my-slider title="Diffusion" min="0" max="10" step="0.001" startingValue="0.01" callbackFunction="changeDiffusion"></my-slider>
             <my-slider title="GravityX" min="-50" max="50" step="0.001" startingValue="0" callbackFunction="changeGravityX"></my-slider>
             <my-slider title="GravityY" min="-50" max="50" step="0.001" startingValue="9.81" callbackFunction="changeGravityY"></my-slider>
-            
+            <div>
+                <span>Set Timestep</span>
+                <input type="checkbox" id="setDt" onclick="changeDtToCfl()" checked>
+            </div>
+            <my-slider title="Timestep" min="0.0001" max=".2" step="0.0001" startingValue="0.0025" callbackFunction="changeDTofCFL"></my-slider>
 
-            
             <div id="button-container">
                 <my-button title="play_arrow" callbackFunction="start"></my-button>
                 <my-button title="pause " callbackFunction="stopp"></my-button>
@@ -60,7 +63,7 @@
 
     <div class="infos-top-left">
         <div id="fps">10fps</div>
-        <div><span id="mode">red</span><span id="mode-infos">[r] red, [v] velocity, [x] velocity x, [y] velocity y</span></div>
+        <div><span id="mode">red</span><!-- <span id="mode-infos">[...]</span> --></div>
     </div>
 
     <div class="canvas-container">
