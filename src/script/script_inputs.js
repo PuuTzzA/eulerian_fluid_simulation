@@ -269,11 +269,11 @@ let densitySoot = 0.1;
 let diffusion = 0.01;
 
 let bodies = [];
-bodies.push(new SolidBox(0.5, 0.6, 0.5, 0.1, Math.PI * 0.25, 0, 0, 0));
+bodies.push(new SolidBox(0.5, 0.6, 0.5, 0.1, Math.PI * 0.25, 0, 0, 5));
 bodies.push(new SolidSphere(0.2, 0.2, 0.2, 0, 0, 0, 0));
 
 let inflows = [];
-inflows.push(new Inflow(.45, .2, .55, .25, 2.0, 294 + 300, 0.0, 0.0, false));
+inflows.push(new Inflow(.38, .1, .62, .2, 1.5, 294, 0.0, 0.0, false));
 
 // bodies.push(new SolidBox(0.5, 0.6, 0.7, 0.1, Math.PI * 0.25, 0.0, 0.0, 0.0));
 function newFluid() {

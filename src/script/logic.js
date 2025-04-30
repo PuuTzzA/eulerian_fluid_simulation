@@ -12,6 +12,36 @@ window.addEventListener("resize", e => {
     canvas.height = window.innerHeight;
 })
 
+class ColorRamp {
+    constructor(points) {
+        this.points = points
+            .map(([color, t]) => ({ color, t }))
+            .sort((a, b) => a.t - b.t);
+    }
+
+    at(t) {
+        if (t <= this.points[0].t) return this.points[0].color;
+        if (t >= this.points[this.points.length - 1].t) return this.points[this.points.length - 1].color;
+
+        for (let i = 0; i < this.points.length - 1; i++) {
+            const p1 = this.points[i];
+            const p2 = this.points[i + 1];
+            if (t >= p1.t && t <= p2.t) {
+                const localT = (t - p1.t) / (p2.t - p1.t);
+                return this.lerpColor(p1.color, p2.color, localT);
+            }
+        }
+    }
+
+    lerpColor(c1, c2, t) {
+        return [
+            Math.round(c1[0] * t + c2[0] * (1 - t)),
+            Math.round(c1[1] * t + c2[1] * (1 - t)),
+            Math.round(c1[2] * t + c2[2] * (1 - t)),
+        ];
+    }
+}
+
 class GraphicsSettings {
     constructor() {
         this.lineWidth = 1;
@@ -30,6 +60,14 @@ class GraphicsSettings {
 
     getLineColour() {
         return this.lineColour;
+    }
+
+    getTempColour(temp) {
+        const minTemp = 0;
+        const maxTemp = 10000;
+        const tempRamp = new ColorRamp([[[0, 255, 238], 0], [[0, 255, 8], 0.7], [[255, 0, 0], 1]]);
+        const c = tempRamp.at((temp - minTemp) / (maxTemp - minTemp));
+        return `rgb(${c[0]}, ${c[1]}, ${c[2]})`;
     }
 
     getHatchingSettings(label, gridSize) {
@@ -244,7 +282,6 @@ class Inflow {
         this.active = act;
     }
 }
-
 
 /**
  * abstract class for solid body
@@ -1747,13 +1784,19 @@ class Fluid {
         const fac = Math.min(this.w, this.h);
 
         for (let i = 0; i < this.qs.particleCount; i++) {
-            ctx.fillStyle = "rgba(0, 255, 0, .5)";
+            const temp = this.qs.properties[1][i];
+
+            if (!isNaN(temp)) {
+                ctx.fillStyle = this.gs.getTempColour(temp);
+            } else {
+                ctx.fillStyle = "red";
+            }
 
             let x = this.qs.posX[i];
             let y = this.qs.posY[i];
 
             ctx.beginPath();
-            ctx.arc(x * this.gridPixelSize, y * this.gridPixelSize, 1, 0, 2 * Math.PI);
+            ctx.arc(x * this.gridPixelSize, y * this.gridPixelSize + offsetTop, 1, 0, 2 * Math.PI);
             ctx.fill();
         }
 
